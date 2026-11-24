@@ -9,6 +9,7 @@ function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState
     hasConnections: true,
     hasLoadedShellSnapshot: true,
     hasFreshShellSnapshot: true,
+    hasActivelySyncingEnvironment: false,
     hasPendingShellSnapshot: false,
     hasSyncingConnectedEnvironment: false,
     hasReadyEnvironment: true,
@@ -76,6 +77,13 @@ describe("workspace connection status", () => {
 
     expect(workspaceConnectionStatusPresentation(state)).toEqual({
       label: "Syncing threads...",
+      showsProgress: true,
+    });
+
+    expect(
+      workspaceConnectionStatusPresentation({ ...state, hasFreshShellSnapshot: false }),
+    ).toEqual({
+      label: "Loading threads...",
       showsProgress: true,
     });
   });

@@ -1,11 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 
-import {
-  environmentShell,
-  environmentShellSummaryAtom,
-  freshShellEnvironmentIdsAtom,
-} from "./shell";
+import { environmentShell, environmentShellSummaryAtom } from "./shell";
+import { steadyFreshEnvironmentIdsAtom, syncingShellEnvironmentIdsAtom } from "./threads";
 import { isEnvironmentShellPending, projectWorkspaceState } from "./workspaceModel";
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations } from "./presentation";
@@ -45,7 +42,8 @@ export const workspaceStateAtom = Atom.make((get) =>
     networkStatus: get(environmentCatalog.networkStatusValueAtom),
     environments: get(workspaceConnections.environmentsAtom),
     shellSummary: get(environmentShellSummaryAtom),
-    hasFreshShellSnapshot: get(freshShellEnvironmentIdsAtom).size > 0,
+    hasFreshShellSnapshot: get(steadyFreshEnvironmentIdsAtom).size > 0,
+    hasActivelySyncingEnvironment: get(syncingShellEnvironmentIdsAtom).size > 0,
     hasSyncingConnectedEnvironment: get(hasSyncingConnectedEnvironmentAtom),
   }),
 ).pipe(Atom.withLabel("mobile:workspace-state"));

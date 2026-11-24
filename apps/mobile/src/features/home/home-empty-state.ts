@@ -1,7 +1,11 @@
 import { msg } from "gt-react-native";
 
 import { m, type MessageResolver } from "../../i18n/messages";
-import { isWorkspaceCatalogPending, type WorkspaceState } from "../../state/workspaceModel";
+import {
+  isWorkspaceCatalogPending,
+  isWorkspaceEnvironmentUnavailable,
+  type WorkspaceState,
+} from "../../state/workspaceModel";
 
 export interface HomeEmptyState {
   readonly title: string;
@@ -43,19 +47,14 @@ function deriveEmptyState(
     };
   }
 
-  if (
-    (catalogState.connectionState === "available" ||
-      catalogState.connectionState === "offline" ||
-      catalogState.connectionState === "error" ||
-      catalogState.connectionState === "unsupported") &&
-    !catalogState.hasFreshShellSnapshot
-  ) {
+  if (isWorkspaceEnvironmentUnavailable(catalogState)) {
     return {
       title:
         catalogState.connectionState === "unsupported"
           ? resolve(msg("Client not supported"))
           : resolve(msg("Environment unavailable")),
       detail:
+        catalogState.shellSnapshotError ??
         catalogState.connectionError ??
         resolve(
           msg(

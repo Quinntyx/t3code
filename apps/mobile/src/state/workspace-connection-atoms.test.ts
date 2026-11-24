@@ -63,6 +63,7 @@ describe("workspace connection subscriptions", () => {
         environments: [projectWorkspaceEnvironment(ID, get(h.source)!)],
         shellSummary: get(shell),
         hasFreshShellSnapshot: true,
+        hasActivelySyncingEnvironment: false,
         hasSyncingConnectedEnvironment: false,
       }),
     );

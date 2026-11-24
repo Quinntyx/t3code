@@ -66,10 +66,11 @@ const ROUTE_CHECK_HEAD_START_MS = 500;
 
 export interface ConnectionDriverConnectOptions {
   /**
-   * Try the first route directly without pre-checking routes or waiting out the head start.
-   * Used when replacing a silent socket whose host just answered a fresh check on that route.
+   * When set and the first usable route has this route ID, try it directly without
+   * pre-checking routes or waiting out the head start. Used when replacing a silent
+   * socket whose host just answered a fresh check on that route.
    */
-  readonly skipFirstRouteCheck?: boolean;
+  readonly skipRouteCheckForId?: string;
 }
 
 export class ConnectionDriver extends Context.Service<
@@ -119,7 +120,11 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     return result;
   });
   let routes = allRoutes;
-  if (options?.skipFirstRouteCheck === true && allRoutes.length > 0) {
+  if (
+    options?.skipRouteCheckForId !== undefined &&
+    allRoutes.length > 0 &&
+    connectionRouteId(allRoutes[0]!.target) === options.skipRouteCheckForId
+  ) {
     const first = allRoutes[0]!;
     const result = yield* attempt(first);
     if (result._tag === "Success") return { ...result.success, refusedRouteIds };

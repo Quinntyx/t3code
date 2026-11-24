@@ -5,10 +5,13 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 import type { MarkedText } from "@t3tools/client-runtime/errors";
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 
 import {
+  AVAILABLE_CONNECTION_STATE,
   type EnvironmentConnectionPhase,
   type NetworkStatus,
+  type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 
 import type { EnvironmentConnectionSummary as WorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
@@ -29,8 +32,10 @@ export interface WorkspaceConnectionState {
 
 export interface WorkspaceState extends WorkspaceConnectionState {
   readonly hasLoadedShellSnapshot: boolean;
-  /** True once at least one enabled environment has completed a live sync in this foreground session. */
+  /** True once at least one enabled environment has a fresh displayed snapshot in this session. */
   readonly hasFreshShellSnapshot: boolean;
+  /** True while at least one non-fresh enabled environment is actively connecting or syncing. */
+  readonly hasActivelySyncingEnvironment: boolean;
   readonly hasPendingShellSnapshot: boolean;
   readonly hasSyncingConnectedEnvironment: boolean;
   readonly shellSnapshotError: string | null;
@@ -105,12 +110,14 @@ export function projectWorkspaceState(input: {
   readonly environments: ReadonlyArray<WorkspaceEnvironment>;
   readonly shellSummary: EnvironmentShellSummary;
   readonly hasFreshShellSnapshot: boolean;
+  readonly hasActivelySyncingEnvironment: boolean;
   readonly hasSyncingConnectedEnvironment: boolean;
 }): WorkspaceState {
   return {
     ...projectWorkspaceConnectionState(input),
     hasLoadedShellSnapshot: input.shellSummary.hasSnapshot,
     hasFreshShellSnapshot: input.hasFreshShellSnapshot,
+    hasActivelySyncingEnvironment: input.hasActivelySyncingEnvironment,
     hasPendingShellSnapshot: input.shellSummary.hasSynchronizingShell,
     hasSyncingConnectedEnvironment: input.hasSyncingConnectedEnvironment,
     shellSnapshotError: input.shellSummary.firstError,
@@ -120,6 +127,52 @@ export function projectWorkspaceState(input: {
 // The atom starts at EMPTY_SHELL_STATE itself; any state after the cache read is a new object.
 export function isEnvironmentShellPending(state: EnvironmentShellState): boolean {
   return state === EMPTY_SHELL_STATE || state.status === "synchronizing";
+}
+
+/**
+ * Whether a non-fresh environment should display loading skeletons: only during initial/clean
+ * connection attempts or healthy connected shell synchronization (including while its fresh
+ * snapshot is held by `steadyShells`), never during failed backoff retries, offline, blocked,
+ * or shell subscription errors.
+ */
+export function isEnvironmentActivelySyncingShell(input: {
+  readonly connection: SupervisorConnectionState;
+  readonly shell: Pick<EnvironmentShellState, "status" | "error" | "fresh">;
+  readonly isSteadyFresh: boolean;
+}): boolean {
+  if (input.isSteadyFresh) return false;
+  if (Option.isSome(input.shell.error)) return false;
+  if (input.connection === AVAILABLE_CONNECTION_STATE) return true;
+  if (input.connection.phase === "connecting") {
+    return input.connection.lastFailure === null;
+  }
+  if (input.connection.phase === "connected") {
+    return (
+      input.shell.status === "synchronizing" ||
+      input.shell.fresh ||
+      input.shell === EMPTY_SHELL_STATE
+    );
+  }
+  return false;
+}
+
+/**
+ * True when saved environments have no fresh displayed data, no clean connect/sync is in flight,
+ * and the workspace is offline, blocked, in failed backoff, or hit a shell sync error.
+ */
+export function isWorkspaceEnvironmentUnavailable(state: WorkspaceState): boolean {
+  if (!state.hasConnections || state.hasFreshShellSnapshot || state.hasActivelySyncingEnvironment) {
+    return false;
+  }
+  if (state.shellSnapshotError !== null) return true;
+  return (
+    state.networkStatus === "offline" ||
+    state.connectionState === "available" ||
+    state.connectionState === "offline" ||
+    state.connectionState === "error" ||
+    state.connectionState === "unsupported" ||
+    (state.connectionState === "reconnecting" && state.connectionError !== null)
+  );
 }
 
 // Reconnecting environments keep their last failure, so an error alone does not end the wait.

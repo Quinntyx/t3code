@@ -1,11 +1,14 @@
 import type { NetworkStatus } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 
+const EMPTY_THREADS: ReadonlyArray<never> = [];
+
 export function filterFreshThreads<T extends { readonly environmentId: EnvironmentId }>(
   threads: ReadonlyArray<T>,
   freshEnvironmentIds: ReadonlySet<EnvironmentId>,
 ): ReadonlyArray<T> {
   if (threads.length === 0) return threads;
+  if (freshEnvironmentIds.size === 0) return EMPTY_THREADS;
   let allFresh = true;
   for (const thread of threads) {
     if (!freshEnvironmentIds.has(thread.environmentId)) {
@@ -13,9 +16,9 @@ export function filterFreshThreads<T extends { readonly environmentId: Environme
       break;
     }
   }
-  return allFresh
-    ? threads
-    : threads.filter((thread) => freshEnvironmentIds.has(thread.environmentId));
+  if (allFresh) return threads;
+  const filtered = threads.filter((thread) => freshEnvironmentIds.has(thread.environmentId));
+  return filtered.length === 0 ? EMPTY_THREADS : filtered;
 }
 
 export function shouldShowThreadListSkeleton(input: {

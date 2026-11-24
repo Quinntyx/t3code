@@ -12,8 +12,11 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 
 import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { useProjects } from "../../state/entities";
-import { freshShellEnvironmentIdsAtom, syncingShellEnvironmentIdsAtom } from "../../state/shell";
-import { steadyNavigationThreadShellsAtom } from "../../state/threads";
+import {
+  steadyFreshEnvironmentIdsAtom,
+  steadyNavigationThreadShellsAtom,
+  syncingShellEnvironmentIdsAtom,
+} from "../../state/threads";
 import {
   filterFreshThreads,
   shouldShowThreadListSkeleton,
@@ -59,7 +62,7 @@ export function HomeRouteScreen() {
   const projects = useProjects();
   // Stop rebuilding the streaming thread list while Thread covers Home.
   const visible = useHomeRouteVisible();
-  const freshEnvironmentIds = useAtomValueWhileVisible(freshShellEnvironmentIdsAtom, visible);
+  const freshEnvironmentIds = useAtomValueWhileVisible(steadyFreshEnvironmentIdsAtom, visible);
   const syncingEnvironmentIds = useAtomValueWhileVisible(syncingShellEnvironmentIdsAtom, visible);
   const rawThreads = useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible);
   const threads = useLaunchingThreads(filterFreshThreads(rawThreads, freshEnvironmentIds));
@@ -260,6 +263,7 @@ export function HomeRouteScreen() {
             searchQuery={searchQuery}
             selectedEnvironmentId={selectedEnvironmentId}
             selectedProjectKey={selectedProjectKey}
+            freshEnvironmentIds={freshEnvironmentIds}
             showsSkeleton={showsSkeleton}
             threads={threads}
             visible={visible}

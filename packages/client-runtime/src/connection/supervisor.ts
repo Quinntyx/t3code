@@ -353,17 +353,18 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const preferred = yield* Ref.getAndSet(preferredRouteId, Option.none());
     const replacement = yield* Ref.getAndSet(replacementRouteId, Option.none());
     const chosen = Option.isSome(preferred) ? preferred : replacement;
-    const skipFirstRouteCheck = Option.isNone(preferred) && Option.isSome(replacement);
-    if (Option.isNone(chosen)) return { entry: latest, skipFirstRouteCheck: false };
+    const skipRouteCheckForId =
+      Option.isNone(preferred) && Option.isSome(replacement) ? replacement.value : undefined;
+    if (Option.isNone(chosen)) return { entry: latest, skipRouteCheckForId: undefined };
     const route = routes.find((candidate) => connectionRouteId(candidate.target) === chosen.value);
     return route === undefined
-      ? { entry: latest, skipFirstRouteCheck: false }
+      ? { entry: latest, skipRouteCheckForId: undefined }
       : {
           entry: entryWithRoutes(latest, [
             route,
             ...routes.filter((candidate) => candidate !== route),
           ]),
-          skipFirstRouteCheck,
+          skipRouteCheckForId,
         };
   });
 
@@ -527,7 +528,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     lastFailure: ConnectionAttemptError | null,
     synchronizedRoutes: Ref.Ref<number>,
   ) {
-    const { entry: nextEntry, skipFirstRouteCheck } = yield* attemptEntry;
+    const { entry: nextEntry, skipRouteCheckForId } = yield* attemptEntry;
     return yield* driver.connect(
       nextEntry,
       (progress) =>
@@ -535,7 +536,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           ? Ref.update(synchronizedRoutes, (count) => count + 1)
           : Effect.void
         ).pipe(Effect.andThen(reportProgress(attempt, nextGeneration, lastFailure, progress))),
-      skipFirstRouteCheck ? { skipFirstRouteCheck: true } : undefined,
+      skipRouteCheckForId !== undefined ? { skipRouteCheckForId } : undefined,
     );
   });
 

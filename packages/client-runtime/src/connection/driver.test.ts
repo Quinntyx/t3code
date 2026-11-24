@@ -73,7 +73,7 @@ describe("ConnectionDriver", () => {
   );
 
   it.effect(
-    "tries the first route without checking routes when skipFirstRouteCheck is set, and falls back if it fails",
+    "tries the matching route without checking routes when skipRouteCheckForId matches, and falls back if it fails",
     () =>
       Effect.gen(function* () {
         const checked = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -111,12 +111,42 @@ describe("ConnectionDriver", () => {
               }),
             );
           },
-          { skipFirstRouteCheck: true },
+          { skipRouteCheckForId: "first" },
         ).pipe(Effect.scoped);
 
         expect((direct.prepared.target as SshConnectionTarget).connectionId).toBe("first");
         expect(yield* Ref.get(checked)).toEqual([]);
         expect(yield* Ref.get(attempted)).toEqual(["first"]);
+
+        // A non-matching route ID still runs route checks before connecting.
+        yield* Ref.set(checked, []);
+        yield* Ref.set(attempted, []);
+        yield* ConnectionDriver.connectOverRoutes(
+          entry,
+          (route) =>
+            Ref.update(checked, (all) => [
+              ...all,
+              (route.target as SshConnectionTarget).connectionId,
+            ]).pipe(Effect.as<ConnectionDriver.RouteCheck>("answered")),
+          (route) => {
+            const id = (route.target as SshConnectionTarget).connectionId;
+            return Ref.update(attempted, (all) => [...all, id]).pipe(
+              Effect.as({
+                prepared: {
+                  environmentId: route.target.environmentId,
+                  label: route.target.label,
+                  httpBaseUrl: "http://127.0.0.1:1",
+                  socketUrl: "ws://127.0.0.1:1/ws",
+                  httpAuthorization: null,
+                  target: route.target,
+                },
+                session: {} as RpcSession.RpcSession,
+              }),
+            );
+          },
+          { skipRouteCheckForId: "other" },
+        ).pipe(Effect.scoped);
+        expect(yield* Ref.get(checked)).toContain("first");
 
         // When the first route fails, remaining routes still run their checks and connect.
         yield* Ref.set(checked, []);
@@ -153,7 +183,7 @@ describe("ConnectionDriver", () => {
               ),
             );
           },
-          { skipFirstRouteCheck: true },
+          { skipRouteCheckForId: "first" },
         ).pipe(Effect.scoped);
 
         expect((fallback.prepared.target as SshConnectionTarget).connectionId).toBe("second");

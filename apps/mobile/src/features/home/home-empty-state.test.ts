@@ -26,6 +26,7 @@ function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState
     hasConnections: true,
     hasLoadedShellSnapshot: true,
     hasFreshShellSnapshot: true,
+    hasActivelySyncingEnvironment: false,
     hasPendingShellSnapshot: false,
     hasSyncingConnectedEnvironment: false,
     hasReadyEnvironment: true,
@@ -45,9 +46,11 @@ const reconnecting = connectingEnvironment("reconnecting", RETAINED_FAILURE);
 describe("home empty state", () => {
   it.each([
     [
-      "waits while a saved environment retries after a retained failure",
+      "reports environment unavailable while a saved environment sits in failed backoff",
       workspaceState({
         hasLoadedShellSnapshot: false,
+        hasFreshShellSnapshot: false,
+        hasActivelySyncingEnvironment: false,
         hasPendingShellSnapshot: true,
         hasReadyEnvironment: false,
         hasConnectingEnvironment: true,
@@ -56,12 +59,28 @@ describe("home empty state", () => {
         connectionError: RETAINED_FAILURE,
       }),
       1,
-      { title: "Connecting to environment", loading: true, showsAddEnvironment: false },
+      { title: "Environment unavailable", loading: false, showsAddEnvironment: true },
+    ],
+    [
+      "reports environment unavailable when a connected socket fails to synchronize its shell",
+      workspaceState({
+        hasLoadedShellSnapshot: true,
+        hasFreshShellSnapshot: false,
+        hasActivelySyncingEnvironment: false,
+        hasPendingShellSnapshot: false,
+        hasReadyEnvironment: true,
+        connectionState: "connected",
+        shellSnapshotError: "Could not synchronize environment data.",
+      }),
+      1,
+      { title: "Environment unavailable", loading: false, showsAddEnvironment: false },
     ],
     [
       "waits for a connected environment's first shell snapshot",
       workspaceState({
         hasLoadedShellSnapshot: false,
+        hasFreshShellSnapshot: false,
+        hasActivelySyncingEnvironment: true,
         hasPendingShellSnapshot: true,
         hasSyncingConnectedEnvironment: true,
       }),

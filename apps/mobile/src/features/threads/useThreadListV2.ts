@@ -53,6 +53,8 @@ export function useThreadListV2(input: {
   readonly searchQuery: string;
   /** Threads that match the search by content, keyed like `threadSearchMatchKey`. */
   readonly searchMatches: ReadonlyMap<string, unknown>;
+  /** When provided, older settled counts and pages are read only for fresh environments. */
+  readonly freshEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly snoozeEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly pinReorderEnvironmentIds: ReadonlySet<EnvironmentId>;
@@ -131,8 +133,16 @@ export function useThreadListV2(input: {
         environmentId: input.environmentId,
         projectRefs: input.projectRefs,
         settlementEnvironmentIds: input.settlementEnvironmentIds,
+        ...(input.freshEnvironmentIds === undefined
+          ? {}
+          : { freshEnvironmentIds: input.freshEnvironmentIds }),
       }),
-    [input.environmentId, input.projectRefs, input.settlementEnvironmentIds],
+    [
+      input.environmentId,
+      input.projectRefs,
+      input.settlementEnvironmentIds,
+      input.freshEnvironmentIds,
+    ],
   );
   const olderSettledShelf = useOlderSettledShelf({
     scopes,
@@ -252,9 +262,14 @@ function olderSettledScopes(input: {
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs: LayoutInput["projectRefs"];
   readonly settlementEnvironmentIds: ReadonlySet<EnvironmentId>;
+  readonly freshEnvironmentIds?: ReadonlySet<EnvironmentId>;
 }): ReadonlyArray<OlderSettledScope> {
-  const environmentIds =
-    input.environmentId === null ? [...input.settlementEnvironmentIds] : [input.environmentId];
+  const environmentIds = (
+    input.environmentId === null ? [...input.settlementEnvironmentIds] : [input.environmentId]
+  ).filter(
+    (environmentId) =>
+      input.freshEnvironmentIds === undefined || input.freshEnvironmentIds.has(environmentId),
+  );
   return environmentIds.flatMap((environmentId): ReadonlyArray<OlderSettledScope> => {
     if (input.projectRefs == null) return [{ environmentId, projectIds: null }];
     const projectIds = input.projectRefs.flatMap((ref) =>

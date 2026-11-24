@@ -112,6 +112,7 @@ interface HomeScreenProps {
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  readonly freshEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly showsSkeleton: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
@@ -420,6 +421,7 @@ export function HomeScreen(props: HomeScreenProps) {
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
+    freshEnvironmentIds: props.freshEnvironmentIds,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -627,7 +629,7 @@ export function HomeScreen(props: HomeScreenProps) {
         <ScreenContent surface={sidebarSurface ? "drawer" : "screen"}>
           <View className={cn("flex-1", Platform.OS !== "android" && contentBackground)}>
             <ThreadListSkeleton
-              variant="home"
+              variant={sidebarSurface ? "sidebar" : "home"}
               style={{
                 paddingTop: Platform.OS === "ios" ? contentTopInset : 16,
                 paddingLeft:

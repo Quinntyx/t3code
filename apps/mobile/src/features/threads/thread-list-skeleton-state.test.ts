@@ -13,6 +13,7 @@ describe("filterFreshThreads", () => {
       { id: "t2", environmentId: ENV_B },
     ];
     expect(filterFreshThreads(rows, new Set())).toEqual([]);
+    expect(filterFreshThreads(rows, new Set())).toBe(filterFreshThreads(rows, new Set()));
     expect(filterFreshThreads(rows, new Set([ENV_A]))).toEqual([rows[0]]);
     expect(filterFreshThreads(rows, new Set([ENV_A, ENV_B]))).toBe(rows);
   });

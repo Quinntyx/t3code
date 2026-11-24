@@ -29,8 +29,12 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
-import { freshShellEnvironmentIdsAtom, syncingShellEnvironmentIdsAtom } from "../../state/shell";
-import { steadyNavigationThreadShellsAtom } from "../../state/threads";
+import {
+  steadyFreshEnvironmentIdsAtom,
+  steadyNavigationThreadShellsAtom,
+  syncingShellEnvironmentIdsAtom,
+} from "../../state/threads";
+import { isWorkspaceEnvironmentUnavailable } from "../../state/workspaceModel";
 import { ThreadListSkeleton } from "./ThreadListSkeleton";
 import { filterFreshThreads, shouldShowThreadListSkeleton } from "./thread-list-skeleton-state";
 import { useThreadSearch } from "../../state/queries";
@@ -139,7 +143,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
-  const freshEnvironmentIds = useAtomValue(freshShellEnvironmentIdsAtom);
+  const freshEnvironmentIds = useAtomValue(steadyFreshEnvironmentIdsAtom);
   const syncingEnvironmentIds = useAtomValue(syncingShellEnvironmentIdsAtom);
   const threads = filterFreshThreads(
     useAtomValue(steadyNavigationThreadShellsAtom),
@@ -306,6 +310,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
+    freshEnvironmentIds,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -597,7 +602,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     />
   );
   const hasScopedFreshRows =
-    threads.some(
+    launchingThreads.some(
       (thread) =>
         thread.archivedAt === null &&
         (options.selectedEnvironmentId === null ||
@@ -616,17 +621,11 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     syncingEnvironmentIds,
     hasVisibleRows: hasScopedFreshRows,
   });
+  const isEnvironmentUnavailable = isWorkspaceEnvironmentUnavailable(catalogState);
   const showAddEnvironment =
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
-    !catalogState.hasConnectingEnvironment;
-  const isEnvironmentUnavailable =
-    !catalogState.hasFreshShellSnapshot &&
-    catalogState.hasConnections &&
-    (catalogState.connectionState === "available" ||
-      catalogState.connectionState === "offline" ||
-      catalogState.connectionState === "error" ||
-      catalogState.connectionState === "unsupported");
+    (!catalogState.hasConnectingEnvironment || isEnvironmentUnavailable);
   const listEmpty = (
     <View>
       <Text
@@ -639,7 +638,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         {catalogState.isLoadingConnections
           ? gt("Loading threads…")
           : isEnvironmentUnavailable
-            ? (catalogState.connectionError ?? gt("Environment unavailable"))
+            ? (catalogState.shellSnapshotError ??
+              catalogState.connectionError ??
+              gt("Environment unavailable"))
             : showAddEnvironment
               ? gt("No environments connected")
               : props.searchQuery.trim().length > 0
@@ -672,10 +673,22 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
         {header}
         <View className="flex-1">
           {showsSkeleton ? (
-            <ThreadListSkeleton
-              variant="sidebar"
-              style={[styles.threadListContent, { paddingTop: 6 }]}
-            />
+            <NativeScrollView
+              automaticallyAdjustsScrollIndicatorInsets
+              contentInsetAdjustmentBehavior="automatic"
+              contentContainerStyle={[
+                styles.threadListContent,
+                {
+                  paddingBottom: Math.max(insets.bottom, 16) + 16,
+                  paddingTop: 6,
+                },
+              ]}
+              scrollEnabled={false}
+              showsVerticalScrollIndicator={false}
+              style={styles.threadList}
+            >
+              <ThreadListSkeleton variant="sidebar" />
+            </NativeScrollView>
           ) : (
             <SwipeableScrollGateProvider enabled={swipeEnabled}>
               <GestureDetector gesture={sidebarScrollGesture}>

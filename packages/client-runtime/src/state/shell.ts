@@ -640,8 +640,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup),
           Stream.tap((reason) =>
             reason === "application-active-long"
-              ? SubscriptionRef.update(state, (current) =>
-                  current.fresh ? { ...current, fresh: false } : current,
+              ? snapshotWriteLock.withPermit(
+                  Ref.set(awaitingCompletion, true).pipe(
+                    Effect.andThen(
+                      SubscriptionRef.update(state, (current) =>
+                        current.fresh ? { ...current, fresh: false } : current,
+                      ),
+                    ),
+                  ),
                 )
               : Effect.void,
           ),
@@ -886,11 +892,6 @@ function createEnvironmentShellProgressAtoms(
         Atom.withLabel(`environment-shell-has-snapshot:${environmentId}`),
       ),
     ),
-    freshAtom: Atom.family((environmentId: EnvironmentId) =>
-      Atom.make((get) => get(stateValueAtom(environmentId)).fresh).pipe(
-        Atom.withLabel(`environment-shell-fresh:${environmentId}`),
-      ),
-    ),
   };
 }
 
@@ -915,15 +916,13 @@ export function createEnvironmentShellAtoms<R, E>(
     ).pipe(Atom.withLabel(`environment-shell-state-value:${environmentId}`)),
   );
 
-  const { statusAtom, hasSnapshotAtom, freshAtom } =
-    createEnvironmentShellProgressAtoms(stateValueAtom);
+  const { statusAtom, hasSnapshotAtom } = createEnvironmentShellProgressAtoms(stateValueAtom);
 
   return {
     stateAtom,
     stateValueAtom,
     statusAtom,
     hasSnapshotAtom,
-    freshAtom,
   };
 }
 
@@ -942,26 +941,6 @@ export function createLiveShellEnvironmentIdsAtom(input: {
     previous = next;
     return next;
   }).pipe(Atom.withLabel("live-shell-environment-ids"));
-}
-
-/**
- * Environments whose shell has completed a live sync in the current foreground session.
- * Stays true across brief resume probes, and clears on cold start or a long background resume.
- */
-export function createFreshShellEnvironmentIdsAtom(input: {
-  readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
-  readonly freshAtom: (environmentId: EnvironmentId) => Atom.Atom<boolean>;
-}) {
-  let previous: ReadonlySet<EnvironmentId> = new Set();
-  return Atom.make((get) => {
-    const next = new Set<EnvironmentId>();
-    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
-      if (get(input.freshAtom(environmentId))) next.add(environmentId);
-    }
-    if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
-    previous = next;
-    return next;
-  }).pipe(Atom.withLabel("fresh-shell-environment-ids"));
 }
 
 export * from "./models.ts";

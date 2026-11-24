@@ -3,14 +3,22 @@ import {
   type EnvironmentShellSummary,
 } from "@t3tools/client-runtime/state/shell";
 import {
+  AVAILABLE_CONNECTION_STATE,
   BearerConnectionProfile,
   BearerConnectionTarget,
+  ConnectionTransientError,
+  type SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 
-import { isEnvironmentShellPending, projectWorkspaceState } from "./workspaceModel";
+import {
+  isEnvironmentActivelySyncingShell,
+  isEnvironmentShellPending,
+  isWorkspaceEnvironmentUnavailable,
+  projectWorkspaceState,
+} from "./workspaceModel";
 import { projectEnvironmentConnectionSummary as projectWorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
 import type { EnvironmentPresentation } from "./environments";
 
@@ -73,12 +81,14 @@ describe("mobile workspace projection", () => {
       environments,
       shellSummary: EMPTY_SHELL_SUMMARY,
       hasFreshShellSnapshot: false,
+      hasActivelySyncingEnvironment: false,
       hasSyncingConnectedEnvironment: false,
     });
 
     expect(state.connectionState).toBe("offline");
     expect(state.networkStatus).toBe("offline");
     expect(state.hasReadyEnvironment).toBe(false);
+    expect(isWorkspaceEnvironmentUnavailable(state)).toBe(true);
   });
 
   it("waits for shell cache initialization and synchronization, but not completed reads", () => {
@@ -98,6 +108,7 @@ describe("mobile workspace projection", () => {
       environments,
       shellSummary: CACHED_SHELL_SUMMARY,
       hasFreshShellSnapshot: false,
+      hasActivelySyncingEnvironment: false,
       hasSyncingConnectedEnvironment: false,
     });
 
@@ -108,4 +119,116 @@ describe("mobile workspace projection", () => {
     expect(state.hasReadyEnvironment).toBe(false);
     expect(state.connectionState).toBe("reconnecting");
   });
+
+  it.each([
+    {
+      name: "clean initial connecting attempt shows skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connecting",
+        attempt: 1,
+      } satisfies SupervisorConnectionState,
+      shell: { status: "cached" as const, error: Option.none<string>(), fresh: false },
+      isSteadyFresh: false,
+      expected: true,
+    },
+    {
+      name: "backoff state exits skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "backoff",
+        attempt: 1,
+        lastFailure: new ConnectionTransientError({ reason: "timeout", detail: "Timed out." }),
+      } satisfies SupervisorConnectionState,
+      shell: { status: "cached" as const, error: Option.none<string>(), fresh: false },
+      isSteadyFresh: false,
+      expected: false,
+    },
+    {
+      name: "retry attempt after a prior failure does not oscillate back to skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connecting",
+        attempt: 2,
+        lastFailure: new ConnectionTransientError({ reason: "timeout", detail: "Timed out." }),
+      } satisfies SupervisorConnectionState,
+      shell: { status: "cached" as const, error: Option.none<string>(), fresh: false },
+      isSteadyFresh: false,
+      expected: false,
+    },
+    {
+      name: "connected socket actively synchronizing shell shows skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connected",
+        attempt: 1,
+      } satisfies SupervisorConnectionState,
+      shell: { status: "synchronizing" as const, error: Option.none<string>(), fresh: false },
+      isSteadyFresh: false,
+      expected: true,
+    },
+    {
+      name: "connected socket whose fresh shell is held by steadyShells stays on skeleton until released",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connected",
+        attempt: 1,
+      } satisfies SupervisorConnectionState,
+      shell: { status: "live" as const, error: Option.none<string>(), fresh: true },
+      isSteadyFresh: false,
+      expected: true,
+    },
+    {
+      name: "connected socket with a failed shell subscription exits skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connected",
+        attempt: 1,
+      } satisfies SupervisorConnectionState,
+      shell: {
+        status: "cached" as const,
+        error: Option.some("Could not synchronize environment data."),
+        fresh: false,
+      },
+      isSteadyFresh: false,
+      expected: false,
+    },
+    {
+      name: "connected socket with an idle non-fresh shell exits skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connected",
+        attempt: 1,
+      } satisfies SupervisorConnectionState,
+      shell: { status: "cached" as const, error: Option.none<string>(), fresh: false },
+      isSteadyFresh: false,
+      expected: false,
+    },
+    {
+      name: "fresh displayed steady shell exits skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "connected",
+        attempt: 1,
+      } satisfies SupervisorConnectionState,
+      shell: { status: "live" as const, error: Option.none<string>(), fresh: true },
+      isSteadyFresh: true,
+      expected: false,
+    },
+  ])(
+    "isEnvironmentActivelySyncingShell: $name",
+    ({ connection, shell, isSteadyFresh, expected }) => {
+      expect(isEnvironmentActivelySyncingShell({ connection, shell, isSteadyFresh })).toBe(
+        expected,
+      );
+    },
+  );
 });

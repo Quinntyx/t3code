@@ -25,6 +25,8 @@ export interface SteadyShellInput {
   readonly status: EnvironmentShellStatus;
   /** The shell state's generation: it grows with each server snapshot. */
   readonly generation: number;
+  /** Whether the incoming snapshot reflects a live sync in the current foreground session. */
+  readonly fresh?: boolean;
   /** The connection is up or on its first attempt, so fresh rows can come soon. */
   readonly connecting: boolean;
   /** How many times the user moved or removed a row of this environment. */
@@ -35,6 +37,8 @@ interface SteadyShell {
   readonly shown: OrchestrationV2ShellSnapshot | null;
   readonly shownSequence: number | null;
   readonly shownGeneration: number;
+  /** True only when `shown` itself is from a live sync in the current foreground session. */
+  readonly shownFresh: boolean;
   /** The rows were shown while live, so each live change shows at once. */
   readonly following: boolean;
   /** The rows hold a server snapshot of the connection that is synchronizing. */
@@ -74,6 +78,7 @@ export function stepSteadyShells(
     shown: input.snapshot,
     shownSequence: input.serverSequence,
     shownGeneration: input.generation,
+    shownFresh: input.fresh ?? true,
     following: input.status === "live",
     caughtUp,
     rowActions:
@@ -86,6 +91,7 @@ export function stepSteadyShells(
       current.shown === next.shown &&
       current.shownSequence === next.shownSequence &&
       current.shownGeneration === next.shownGeneration &&
+      current.shownFresh === next.shownFresh &&
       current.following === next.following &&
       current.caughtUp === next.caughtUp &&
       current.rowActions === next.rowActions;
@@ -98,6 +104,9 @@ export function stepSteadyShells(
       keep(input, show(input, false, current), current);
       continue;
     }
+    const inputFresh = input.fresh ?? true;
+    const heldCurrent =
+      current.shownFresh && !inputFresh ? { ...current, shownFresh: false } : current;
     const newSnapshot = input.generation > current.shownGeneration;
     // Without new server data the change is local (cached links, rows loaded on demand), and
     // an environment that shows nothing (its cache is not read yet) has nothing to hold back.
@@ -111,10 +120,10 @@ export function stepSteadyShells(
       keep(input, show(input, caughtUp, current), current);
     } else if (!synchronizing || newSnapshot) {
       waiting.push(input);
-      shells.set(input.environmentId, current);
+      shells.set(input.environmentId, heldCurrent);
     } else {
       // Events that a synchronizing environment replays are complete only when it is live.
-      keep(input, { ...current, following: false }, current);
+      keep(input, { ...heldCurrent, following: false }, current);
     }
   }
 
@@ -179,6 +188,7 @@ export function createSteadyShellAtoms<E>(input: {
         serverSequence: snapshot?.snapshotSequence ?? null,
         status: shell.status,
         generation: shell.generation,
+        fresh: shell.fresh,
         // A retry after a failure can take minutes, so it is not waited for until it connects.
         connecting: phase === "connecting" || phase === "connected",
         rowActions: get(input.rowActionsAtom(environmentId)),
@@ -208,10 +218,26 @@ export function createSteadyShellAtoms<E>(input: {
     return false;
   }).pipe(Atom.withLabel("steady-shells-holding"));
 
+  const freshEnvironmentIdsAtom = (() => {
+    let previous: ReadonlySet<EnvironmentId> = new Set();
+    return Atom.make((get) => {
+      const { shells } = get(stateAtom);
+      const next = new Set<EnvironmentId>();
+      for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
+        if (shells.get(environmentId)?.shownFresh) next.add(environmentId);
+      }
+      if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel("steady-shells-fresh-environment-ids"));
+  })();
+
   return {
     /** The snapshot a thread list shows for an environment. */
     snapshotAtom,
     /** True while a list shows rows older than the server data the client holds. */
     holdingAtom,
+    /** Enabled environments whose displayed steady snapshot is from a live sync in this session. */
+    freshEnvironmentIdsAtom,
   };
 }

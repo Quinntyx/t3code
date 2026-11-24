@@ -341,3 +341,83 @@ it("counts filtered loaded settled rows as local, then restores their visible co
   expect(result?.layout.listedSettledThreads).toEqual([thread]);
   expect(result?.layout.settledCount).toBe(1);
 });
+
+it("omits cached older settled counts for environments that have not synced fresh yet", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const environmentId = EnvironmentId.make("environment-stale");
+  const projectId = ProjectId.make("project-1");
+  const emptyShelfAtom = Atom.make<ReadonlyMap<EnvironmentId, OlderSettledShelfEnvironment>>(
+    new Map(),
+  );
+  const before = "2026-10-20T00:00:00.000Z";
+  const shelfAtom = Atom.make<ReadonlyMap<EnvironmentId, OlderSettledShelfEnvironment>>(
+    new Map<EnvironmentId, OlderSettledShelfEnvironment>([
+      [
+        environmentId,
+        {
+          older: {
+            before,
+            beforeMs: Date.parse(before),
+            counts: new Map([[projectId, 12]]),
+          },
+          pages: { reads: [], frontier: null, status: "ready" as const },
+        },
+      ],
+    ]),
+  );
+  vi.mocked(olderSettledThreads.shelfAtom).mockImplementation((scopes) =>
+    scopes.length === 0 ? emptyShelfAtom : shelfAtom,
+  );
+  const registry = AtomRegistry.make();
+  setLoadedThreads(registry, []);
+  let freshEnvironmentIds = new Set<EnvironmentId>();
+  const observed: Array<ReturnType<typeof useThreadListV2>> = [];
+  function ListProbe() {
+    const list = useThreadListV2({
+      threads: [],
+      pendingTasks: [],
+      environmentId: null,
+      projectRefs: null,
+      searchQuery: "",
+      searchMatches: new Map(),
+      freshEnvironmentIds,
+      settlementEnvironmentIds: new Set([environmentId]),
+      snoozeEnvironmentIds: new Set([environmentId]),
+      pinReorderEnvironmentIds: new Set(),
+      activeReorderEnvironmentIds: new Set(),
+      queuedThreadKeys: new Set(),
+      settledLimit: 20,
+      now: "2026-10-27T00:00:00.000Z",
+      pendingOrder: null,
+      shelfPreferencesLoaded: true,
+      workingShelfEnabled: false,
+      workingShelfExpanded: false,
+      snoozedShelfExpanded: false,
+      settledShelfExpanded: true,
+      selectedThreadKey: null,
+    });
+    useLayoutEffect(() => {
+      observed.push(list);
+    });
+    return null;
+  }
+  const probe = () => (
+    <RegistryContext value={registry}>
+      <ListProbe />
+    </RegistryContext>
+  );
+  const root = createRoot(document.createElement("div"));
+  using _cleanup = {
+    [Symbol.dispose]: () => {
+      act(() => root.unmount());
+      registry.dispose();
+      vi.unstubAllGlobals();
+    },
+  };
+  act(() => root.render(probe()));
+  expect(observed.at(-1)?.layout.settledCount).toBe(0);
+
+  freshEnvironmentIds = new Set([environmentId]);
+  act(() => root.render(probe()));
+  expect(observed.at(-1)?.layout.settledCount).toBe(12);
+});
