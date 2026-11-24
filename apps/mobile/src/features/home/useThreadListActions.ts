@@ -23,10 +23,12 @@ import { readEnvironmentScope } from "../../state/session";
 import { clearComposerDraft } from "../../state/use-composer-drafts";
 import {
   environmentThreadShells,
+  steadyFreshEnvironmentIdsAtom,
   steadyNavigationThreadShellsAtom,
   steadyShellsHoldingAtom,
   threadEnvironment,
 } from "../../state/threads";
+import { filterFreshThreads } from "../threads/thread-list-skeleton-state";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -665,7 +667,10 @@ export function useThreadListActions(): {
     // The rows on screen can be older than the server's while they wait to show. A move
     // planned from them could act on a pin or an order key that the server has replaced.
     if (appAtomRegistry.get(steadyShellsHoldingAtom)) return false;
-    const shells = appAtomRegistry.get(steadyNavigationThreadShellsAtom);
+    const shells = filterFreshThreads(
+      appAtomRegistry.get(steadyNavigationThreadShellsAtom),
+      appAtomRegistry.get(steadyFreshEnvironmentIdsAtom),
+    );
     const current = shells.find(
       (row) => row.id === thread.id && row.environmentId === thread.environmentId,
     );

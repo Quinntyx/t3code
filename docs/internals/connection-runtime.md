@@ -23,13 +23,15 @@ socket without a close event, so a probe still unanswered after 500 ms asks the
 host for its public descriptor over a fresh request, retrying every 250 ms after
 a long mobile suspension and every second otherwise until it answers. If the
 host answers while the socket delivers no frame, the socket is dead and is
-replaced, even while the network reports offline: at once on loopback and LAN,
-and 2.5 seconds after the check starts elsewhere, where one lost packet can
-stall a live socket. The replacement connect tries the route that just answered
-first without re-checking it, while still running normal host verification. Without that evidence the probe deadline
-decides: 3 seconds on loopback and LAN routes and after a long mobile
-suspension, when the data on screen is stale; 15 seconds elsewhere, because a
-tailnet over DERP or a VPN can be slower than that on a live socket. A long
+replaced, even while the network reports offline: at once on loopback, LAN, and
+after a long mobile suspension, and 2.5 seconds after the check starts
+elsewhere, where one lost packet can stall a live socket. The replacement
+connect tries the route that just answered first without re-checking it, while
+still running normal host verification. Without that evidence the probe deadline
+decides: 1.5 seconds after a long mobile suspension (extending to 3 seconds if
+the socket delivers a frame), 3 seconds on loopback and LAN routes, and
+15 seconds elsewhere, because a tailnet over DERP or a VPN can be slower than
+that on a live socket. A long
 suspension's probe that times out also replaces the socket regardless of the
 network report. The web and desktop foreground probe skips the fresh request,
 because a busy host can answer it before a queued probe. Foregrounding also

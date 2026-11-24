@@ -240,6 +240,7 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
     idleTtlMs: 0,
     execute: Effect.fn("OlderSettledThreads.readCounts")(function* (input: {
       readonly generation: number;
+      readonly freshSession: number;
       readonly before: string;
       readonly key: string;
     }) {
@@ -276,28 +277,22 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
 
   const olderSettledAtom = Atom.family((environmentId: EnvironmentId) => {
     let generation = -1;
+    let freshSession = 0;
+    let wasFresh = false;
     // The key of the first state seen this generation, when that state is the snapshot itself.
     let snapshotKey: string | null = null;
     let keyInputs: { readonly threads: unknown; readonly removedAt: unknown } | null = null;
     let key = "";
-    let wasFresh = false;
     let fromSnapshotFresh: OlderSettled | null = null;
     let fromSnapshotStale: OlderSettled | null = null;
     let lastRead: OlderSettled | null = null;
+    let lastReadKey: string | null = null;
     let lastReadPage: OrchestrationV2OlderSettledThreadsPage | null = null;
     return Atom.make((get): OlderSettled | null => {
       const state = shellStateValue(get(shellStateAtom(environmentId)));
       const snapshot = state === null ? null : Option.getOrNull(state.snapshot);
       const cut = snapshot?.olderSettled;
       if (state === null || snapshot === null || cut === undefined) return null;
-      if (!state.fresh) {
-        if (wasFresh) {
-          lastRead = null;
-          wasFresh = false;
-        }
-      } else {
-        wasFresh = true;
-      }
       if (fromSnapshotFresh?.before !== cut.before || state.generation !== generation) {
         const base = {
           before: cut.before,
@@ -316,23 +311,38 @@ export function createOlderSettledThreadAtoms<R, ER, E>(
         generation = state.generation;
         snapshotKey = snapshot.snapshotSequence === cut.asOfSequence ? key : null;
         lastRead = null;
+        lastReadKey = null;
+        lastReadPage = null;
       }
-      // Generation 0 is a cached shell: no reads until this session's first snapshot.
-      if (state.generation === 0) return fromSnapshotStale;
-      if (key === snapshotKey) return state.fresh ? fromSnapshotFresh : fromSnapshotStale;
+      // Generation 0 is a cached shell, and a non-fresh shell is awaiting a long-resume sync:
+      // skip `countReadAtom` and bump `freshSession` so the next fresh cycle reads anew.
+      if (state.generation === 0 || !state.fresh) {
+        if (wasFresh) {
+          freshSession += 1;
+          wasFresh = false;
+        }
+        lastRead = null;
+        lastReadKey = null;
+        lastReadPage = null;
+        return fromSnapshotStale;
+      }
+      wasFresh = true;
+      if (key === snapshotKey) return fromSnapshotFresh;
       const read = selectEnvironmentQueryData(
         get(
           countReadAtom({
             environmentId,
-            input: { generation: state.generation, before: cut.before, key },
+            input: { generation: state.generation, freshSession, before: cut.before, key },
           }),
         ),
       );
-      if (read !== null && read !== lastReadPage) {
+      if (read !== null && (read !== lastReadPage || lastReadKey !== key)) {
         lastReadPage = read;
+        lastReadKey = key;
         lastRead = { ...fromSnapshotFresh, counts: countsOf(read), countsFresh: true };
       }
-      return lastRead ?? fromSnapshotStale;
+      if (lastRead !== null && lastReadKey === key) return lastRead;
+      return lastRead !== null ? { ...lastRead, countsFresh: false } : fromSnapshotStale;
     }).pipe(Atom.withLabel(`environment-older-settled:${environmentId}`));
   });
 

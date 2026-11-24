@@ -41,7 +41,11 @@ import {
 } from "../../lib/layout";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { FloatingActionButton } from "../../components/ui/FloatingActionButton";
-import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
+import {
+  isWorkspaceEnvironmentUnavailable,
+  type WorkspaceEnvironment,
+  type WorkspaceState,
+} from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
@@ -638,25 +642,27 @@ export function HomeScreen(props: HomeScreenProps) {
         showsAddEnvironment:
           !props.selectedEnvironmentUnavailable.loading && !props.catalogState.hasReadyEnvironment,
       }
-    : !props.catalogState.isLoadingConnections &&
-        props.catalogState.hasConnections &&
-        v2ScopedProjectGroup !== null
-      ? {
-          title: gt("No threads in {name}", { name: v2ScopedProjectGroup.title }),
-          detail: gt("Choose another project or create a new task."),
-          loading: false,
-          showsAddEnvironment: false,
-        }
+    : isWorkspaceEnvironmentUnavailable(props.catalogState)
+      ? deriveHomeEmptyState(props.catalogState, props.projects.length, m)
       : !props.catalogState.isLoadingConnections &&
           props.catalogState.hasConnections &&
-          selectedEnvironmentLabel !== null
+          v2ScopedProjectGroup !== null
         ? {
-            title: gt("No threads in {name}", { name: selectedEnvironmentLabel }),
-            detail: gt("Choose another environment or create a new task."),
+            title: gt("No threads in {name}", { name: v2ScopedProjectGroup.title }),
+            detail: gt("Choose another project or create a new task."),
             loading: false,
             showsAddEnvironment: false,
           }
-        : deriveHomeEmptyState(props.catalogState, props.projects.length, m);
+        : !props.catalogState.isLoadingConnections &&
+            props.catalogState.hasConnections &&
+            selectedEnvironmentLabel !== null
+          ? {
+              title: gt("No threads in {name}", { name: selectedEnvironmentLabel }),
+              detail: gt("Choose another environment or create a new task."),
+              loading: false,
+              showsAddEnvironment: false,
+            }
+          : deriveHomeEmptyState(props.catalogState, props.projects.length, m);
 
   if (showsSkeleton) {
     return (

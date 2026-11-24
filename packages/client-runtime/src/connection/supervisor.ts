@@ -4,6 +4,7 @@ import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -773,8 +774,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const awaitSilentSocket = Effect.fn("EnvironmentSupervisor.awaitSilentSocket")(function* (
     lease: ConnectedLease,
     routeKind: ConnectionRouteKind | undefined,
-    longResume: boolean,
+    longResumeSignal: Deferred.Deferred<void>,
   ) {
+    const isLongResumeNow = () => Deferred.isDoneUnsafe(longResumeSignal);
+    const waitUnlessLongResume = (delay: Duration.Input) =>
+      Effect.race(Effect.sleep(delay), Deferred.await(longResumeSignal));
     const startedAt = yield* Clock.monotonicTimeNanos;
     yield* Effect.sleep(SILENT_SOCKET_CHECK_AFTER);
     const configLoaded = yield* lease.session.initialConfig.pipe(
@@ -797,16 +801,25 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     );
     const hostAnswersWhileSilent = Effect.gen(function* () {
       // A radio still waking up or a stale pooled connection can fail one check.
-      const recheckEvery = longResume
-        ? LONG_RESUME_SILENT_SOCKET_RECHECK_EVERY
-        : SILENT_SOCKET_RECHECK_EVERY;
       while ((yield* driver.checkHost(lease.prepared)) !== "answered") {
-        yield* Effect.sleep(recheckEvery);
+        const failedAt = yield* Clock.monotonicTimeNanos;
+        if (isLongResumeNow()) {
+          yield* Effect.sleep(LONG_RESUME_SILENT_SOCKET_RECHECK_EVERY);
+          continue;
+        }
+        yield* waitUnlessLongResume(SILENT_SOCKET_RECHECK_EVERY);
+        // If long resume arrived mid-sleep, finish only the shorter 250ms cadence.
+        if (isLongResumeNow()) {
+          const remaining =
+            Duration.toNanosUnsafe(LONG_RESUME_SILENT_SOCKET_RECHECK_EVERY) -
+            ((yield* Clock.monotonicTimeNanos) - failedAt);
+          if (remaining > 0n) yield* Effect.sleep(Duration.nanos(remaining));
+        }
       }
-      if (!answersQuickly(routeKind) && !longResume) {
+      if (!answersQuickly(routeKind) && !isLongResumeNow()) {
         const silentFor = (yield* Clock.monotonicTimeNanos) - startedAt;
         const remaining = Duration.toNanosUnsafe(REMOTE_SILENT_SOCKET_AFTER) - silentFor;
-        if (remaining > 0n) yield* Effect.sleep(Duration.nanos(remaining));
+        if (remaining > 0n) yield* waitUnlessLongResume(Duration.nanos(remaining));
       }
       return (yield* socketSilent) ? ("silent" as const) : ("alive" as const);
     });
@@ -860,8 +873,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       // the socket, needs a fresh check only if the running one sees a frame.
       let recheck = false;
       let longResume = isLongResume(next);
+      const longResumeSignal = yield* Deferred.make<void>();
+      if (longResume) yield* Deferred.succeed(longResumeSignal, undefined);
       const startSilentSocketCheck = Effect.gen(function* () {
-        silentSocket = yield* Effect.forkChild(awaitSilentSocket(lease, routeKind, longResume));
+        silentSocket = yield* Effect.forkChild(
+          awaitSilentSocket(lease, routeKind, longResumeSignal),
+        );
         recheck = false;
       });
       // The web and desktop foreground probe allows a busy host 15 seconds,
@@ -961,12 +978,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           if (isLongResume(probeEvent.signal) && !longResume) {
             longResume = true;
             longResumeStartedAt = yield* Clock.monotonicTimeNanos;
-            // Upgrade any slower check already running (such as one started by a network change)
-            // to the long-resume cadence and zero remote silence window.
-            if (silentSocket !== undefined) {
-              yield* Fiber.interrupt(silentSocket);
-              silentSocket = undefined;
-            }
+            // Upgrade any running check in place so a host answer already waiting out the
+            // remote silence window completes immediately instead of restarting the check.
+            yield* Deferred.succeed(longResumeSignal, undefined);
           }
           yield* armSilentSocketCheck(probeEvent.signal);
           const signalDeadline =
