@@ -57,7 +57,11 @@ import {
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
-import { threadContextsOutsideEnvironment } from "@t3tools/shared/composerContextReferences";
+import {
+  collectComposerContextReferences,
+  replaceComposerContextReferences,
+  threadContextsOutsideEnvironment,
+} from "@t3tools/shared/composerContextReferences";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 
@@ -67,7 +71,32 @@ import {
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
 } from "../../state/use-composer-drafts";
+import {
+  formatScratchImageMarkdown,
+  insertQuickDraftIntoScratch,
+  mergeScratchMarkdown3Way,
+  scratchChunkPreviewTitle,
+} from "@t3tools/shared/scratchDocument";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
+import {
+  cleanupPreparedScratchAttachments,
+  consumeScratchChunk,
+  enqueuePendingMobileScratchConsumption,
+  prepareScratchDraftImageAttachments,
+  removePendingMobileScratchConsumption,
+  scratchEnvironment,
+  scratchRevisionConflictOf,
+  uploadScratchImage,
+} from "../../state/scratch";
+import {
+  armedScratchRange as readArmedScratchRange,
+  releaseScratchRange,
+  useArmedScratchRange,
+  useScratchSpace,
+  useScratchViewState,
+} from "../../state/scratch-space";
+import { ScratchArmedBar } from "./ScratchArmedBar";
+import { ScratchCanvas, type MobileScratchCanvasHandle } from "./ScratchCanvas";
 import { useProjectClone } from "../../state/projectClones";
 import { projectEnvironment } from "../../state/projects";
 import { sourceControlEnvironment } from "../../state/sourceControl";
@@ -185,6 +214,48 @@ export function NewTaskDraftScreen(props: {
       ? selectedProject
       : null,
   );
+  const scratchSpace = useScratchSpace({ project: selectedProject, projects });
+  const canWriteScratch = useAtomValue(
+    scratchSpace === null
+      ? idleShareFlagAtom
+      : scratchEnvironment.save.permissionAtom(scratchSpace.environmentId),
+  );
+  const armedScratchRange = useArmedScratchRange();
+  const scratchViewState = useScratchViewState(scratchSpace?.scratchKey ?? null);
+  const [scratchSending, setScratchSending] = useState(false);
+  const scratchStagingRef = useRef(false);
+  const scratchCanvasRef = useRef<MobileScratchCanvasHandle>(null);
+  const promptFocusedRef = useRef(false);
+  const scratchFocusedRef = useRef(false);
+  const scratchSelectionRef = useRef<{
+    readonly index: number;
+    readonly start: number;
+    readonly end: number;
+  } | null>(null);
+  const latestPromptRef = useRef(flow.prompt);
+  const activeScratchKeyRef = useRef(scratchSpace?.scratchKey ?? null);
+  const activeScratchEnvIdRef = useRef(scratchSpace?.environmentId ?? null);
+  const scratchScrollYRef = useRef(0);
+  const scratchOwnerRuntime = useRemoteEnvironmentRuntime(scratchSpace?.environmentId ?? null);
+  const scratchOwnerConnected = scratchOwnerRuntime?.connectionState === "connected";
+  const canEditScratch =
+    scratchSpace !== null &&
+    canWriteScratch &&
+    scratchSpace.ownerSettled &&
+    scratchSpace.ownerConnected &&
+    scratchSpace.state.loaded;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tracks the active scratch target and live prompt for async staging continuations
+  useEffect(() => {
+    activeScratchKeyRef.current = scratchSpace?.scratchKey ?? null;
+    activeScratchEnvIdRef.current = scratchSpace?.environmentId ?? null;
+    latestPromptRef.current = flow.prompt;
+  }, [flow.prompt, scratchSpace?.environmentId, scratchSpace?.scratchKey]);
+  const armedScratchHere =
+    scratchSpace !== null &&
+    armedScratchRange !== null &&
+    armedScratchRange.scratchKey === scratchSpace.scratchKey
+      ? armedScratchRange
+      : null;
   const selectedProjectLabel = (() => {
     if (!selectedProject) return null;
     const scope = projectScopes.find((candidate) =>
@@ -381,6 +452,100 @@ export function NewTaskDraftScreen(props: {
   };
   const cycleEnvironmentCommands = environments.length > 1 ? (["cycleHost"] as const) : [];
   useHardwareKeyboardCommand(cycleEnvironmentCommands, cycleEnvironment);
+  useHardwareKeyboardCommand("paletteDismiss", () => {
+    if (armedScratchHere === null || scratchSending) return false;
+    releaseScratchRange();
+    return true;
+  });
+  useHardwareKeyboardCommand("scratchToggle", () => {
+    if (scratchSpace === null || scratchSending || scratchStagingRef.current) return false;
+    if (armedScratchHere !== null) {
+      if (readArmedScratchRange()?.scratchKey === scratchSpace.scratchKey) {
+        releaseScratchRange();
+      }
+      return true;
+    }
+    if (scratchFocusedRef.current) {
+      const sel = scratchSelectionRef.current;
+      if (canEditScratch && sel !== null && sel.start !== sel.end) {
+        scratchCanvasRef.current?.armBlockAt(sel.index, Math.min(sel.start, sel.end));
+        return true;
+      }
+      scratchCanvasRef.current?.blurAndSave();
+      promptInputRef.current?.focus();
+      return true;
+    }
+    const stagedRawPrompt = flow.prompt;
+    const quickText = replaceComposerContextReferences(stagedRawPrompt, () => "").trim();
+    const quickImages = flow.attachments.filter((attachment) => attachment.type === "image");
+    if ((quickText.length > 0 || quickImages.length > 0) && canEditScratch) {
+      const capturedScratchKey = scratchSpace.scratchKey;
+      const capturedEnvId = scratchSpace.environmentId;
+      scratchStagingRef.current = true;
+      void (async () => {
+        const uploadedMarkdown: string[] = [];
+        for (const image of quickImages) {
+          const uploaded = await uploadScratchImage({
+            environmentId: capturedEnvId,
+            scratchKey: capturedScratchKey,
+            uri: image.fileUri ?? image.previewUri,
+            name: image.name,
+            mimeType: image.mimeType,
+          });
+          uploadedMarkdown.push(formatScratchImageMarkdown(uploaded.attachmentId, image.name));
+        }
+        if (
+          activeScratchKeyRef.current !== capturedScratchKey ||
+          activeScratchEnvIdRef.current !== capturedEnvId
+        ) {
+          return;
+        }
+        const combined = [quickText, ...uploadedMarkdown].filter((p) => p.length > 0).join("\n\n");
+        if (combined.length === 0) return;
+        scratchCanvasRef.current?.commitPendingEdits();
+        const current = scratchSpace.store.getState();
+        const inserted = insertQuickDraftIntoScratch({
+          markdown: current.markdown,
+          cursorOffset: current.lastCursorOffset,
+          insertedMarkdown: combined,
+        });
+        scratchSpace.store.edit(inserted.nextMarkdown, inserted.nextCursorOffset);
+        scratchViewState.remember({
+          cursorOffset: inserted.nextCursorOffset,
+          scrollY: scratchScrollYRef.current,
+        });
+        if (latestPromptRef.current === stagedRawPrompt) {
+          const retainedContextRefs = collectComposerContextReferences(stagedRawPrompt)
+            .filter((occurrence) => occurrence.kind !== "image")
+            .map((occurrence) => occurrence.source)
+            .join(" ");
+          flow.setPrompt(retainedContextRefs);
+        }
+        for (const image of quickImages) {
+          flow.removeAttachment(image.id);
+        }
+        promptInputRef.current?.blur();
+        scratchCanvasRef.current?.focusRemembered();
+      })()
+        .catch((cause) => {
+          Dialog.alert(
+            gt("Could not add the image"),
+            cause instanceof Error ? cause.message : gt("Try again once connected."),
+          );
+        })
+        .finally(() => {
+          scratchStagingRef.current = false;
+        });
+      return true;
+    }
+    if (promptFocusedRef.current) {
+      promptInputRef.current?.blur();
+      scratchCanvasRef.current?.focusRemembered();
+      return true;
+    }
+    scratchCanvasRef.current?.focusRemembered();
+    return true;
+  });
   const preventRemove =
     (isIncomingShareHoldingRoute && !isProjectPickerReturnActive) || flow.submitting;
   usePreventRemove(preventRemove, () => undefined);
@@ -828,9 +993,59 @@ export function NewTaskDraftScreen(props: {
       {shareUnavailableNotice}
     </View>
   );
-  // The nested hero scroll view does not receive UIKit's automatic navigation inset in split columns.
-  const heroViewport = (headerInset: number, bottomInset: number, viewportHeight: number) =>
-    viewportHeight < SHORT_DRAFT_VIEWPORT_HEIGHT ? null : (
+  // Keep Scratch visible even when the Android soft keyboard shrinks the viewport.
+  const heroViewport = (headerInset: number, bottomInset: number, viewportHeight: number) => {
+    if (scratchSpace !== null) {
+      return (
+        <NativeScrollEdgeEffectsContext
+          value={{ top: "hidden", bottom: "hidden", left: "hidden", right: "hidden" }}
+        >
+          <View
+            collapsable={false}
+            style={{
+              position: "absolute",
+              top: headerInset,
+              bottom: bottomInset,
+              left: 0,
+              right: 0,
+              overflow: "hidden",
+            }}
+          >
+            <View className="mx-auto w-full max-w-2xl flex-1 pt-2">
+              <ScratchCanvas
+                key={`${scratchSpace.environmentId}|${scratchSpace.scratchKey}`}
+                ref={scratchCanvasRef}
+                space={scratchSpace}
+                armed={armedScratchRange}
+                readOnly={scratchSending || !canEditScratch}
+                scrollY={scratchViewState.initial?.scrollY}
+                onEditorFocusChange={(focused) => {
+                  scratchFocusedRef.current = focused;
+                }}
+                onActiveSelectionChange={(selection) => {
+                  scratchSelectionRef.current = selection;
+                }}
+                onArmedSend={(mode) => void handleSendArmedScratchChunk(mode)}
+                onScrollYChange={(scrollY) => {
+                  scratchScrollYRef.current = scrollY;
+                  scratchViewState.remember({
+                    cursorOffset: scratchSpace.store.getState().lastCursorOffset,
+                    scrollY,
+                  });
+                }}
+                onCursorOffsetChange={(cursorOffset) => {
+                  scratchViewState.remember({
+                    cursorOffset,
+                    scrollY: scratchScrollYRef.current,
+                  });
+                }}
+              />
+            </View>
+          </View>
+        </NativeScrollEdgeEffectsContext>
+      );
+    }
+    return viewportHeight < SHORT_DRAFT_VIEWPORT_HEIGHT ? null : (
       <NativeScrollEdgeEffectsContext
         value={{ top: "hidden", bottom: "hidden", left: "hidden", right: "hidden" }}
       >
@@ -864,6 +1079,7 @@ export function NewTaskDraftScreen(props: {
         </View>
       </NativeScrollEdgeEffectsContext>
     );
+  };
 
   const contextProjectLabel = flow.isScratchDraft
     ? gt("No project")
@@ -978,7 +1194,9 @@ export function NewTaskDraftScreen(props: {
           />
         </View>
       ) : null}
-      {viewportHeight < SHORT_DRAFT_VIEWPORT_HEIGHT ? contextControls : null}
+      {scratchSpace !== null || viewportHeight < SHORT_DRAFT_VIEWPORT_HEIGHT
+        ? contextControls
+        : null}
       {flow.canChooseWorkspace ? workspaceControls : null}
     </View>
   );
@@ -1020,6 +1238,166 @@ export function NewTaskDraftScreen(props: {
     },
     m,
   );
+  const armedChunkPreview =
+    scratchSpace !== null && armedScratchHere !== null
+      ? scratchSpace.store.takeBlocks(armedScratchHere)
+      : undefined;
+
+  const handleSendArmedScratchChunk = (mode: "foreground" | "background" = "foreground") => {
+    if (
+      !selectedProject ||
+      scratchSpace === null ||
+      armedScratchHere === null ||
+      scratchSending ||
+      setupBlockReason !== null ||
+      !canOperate ||
+      !canEditScratch ||
+      !scratchOwnerConnected
+    ) {
+      return;
+    }
+    setScratchSending(true);
+    scratchCanvasRef.current?.commitPendingEdits();
+    const committedArmedRange = readArmedScratchRange();
+    if (
+      committedArmedRange === null ||
+      committedArmedRange.scratchKey !== scratchSpace.scratchKey
+    ) {
+      setScratchSending(false);
+      return;
+    }
+    void (async () => {
+      await scratchSpace.store.flush();
+      const liveState = scratchSpace.store.getState();
+      const taken = scratchSpace.store.takeBlocks(committedArmedRange);
+      if (taken === undefined) {
+        if (readArmedScratchRange()?.scratchKey === scratchSpace.scratchKey) {
+          releaseScratchRange();
+        }
+        return;
+      }
+      if (taken.prompt.trim().length === 0 && taken.consumedAttachmentIds.length === 0) return;
+
+      const scratchImages = taken.consumedAttachmentIds.flatMap((attachmentId) => {
+        const match = liveState.attachments.find(
+          (attachment) => attachment.attachmentId === attachmentId,
+        );
+        return match === undefined ? [] : [match];
+      });
+      if (scratchImages.length !== taken.consumedAttachmentIds.length) {
+        Dialog.alert(gt("Could not send selection"), gt("Try again once connected."));
+        return;
+      }
+      const draftAttachments = await prepareScratchDraftImageAttachments({
+        scratchEnvId: scratchSpace.environmentId,
+        targetEnvId: selectedProject.environmentId,
+        attachments: scratchImages,
+      });
+
+      const queuesInsteadOfStarting =
+        connectionState !== "connected" || selectedEnvironmentServerConfig === null;
+      // Mint fresh command/thread/message IDs per armed send so background sends never collide.
+      const armedMetadata = makeTurnCommandMetadata();
+      const message = flow.buildPendingTaskMessage(armedMetadata, {
+        currentCheckoutBranch: queuesInsteadOfStarting ? null : flow.currentCheckoutBranchName,
+        overrideText: taken.prompt,
+        overrideAttachments: draftAttachments,
+      });
+      if (!message) {
+        await cleanupPreparedScratchAttachments(draftAttachments);
+        return;
+      }
+
+      flow.setSubmitting(true);
+      const queued = await settlePromise(() => enqueueThreadOutboxMessage(message));
+      flow.setSubmitting(false);
+      if (AsyncResult.isFailure(queued)) {
+        await cleanupPreparedScratchAttachments(draftAttachments);
+        const error = squashAtomCommandFailure(queued);
+        Dialog.alert(
+          gt("Could not queue task"),
+          errorDisplayMessage(error, m) ?? gt("The task could not be saved to the outbox."),
+        );
+        return;
+      }
+
+      const consumptionId = String(message.messageId);
+      const sendConsume = (expectedRevision: number, nextMarkdown: string) =>
+        consumeScratchChunk({
+          consumptionId,
+          scratchEnvId: scratchSpace.environmentId,
+          scratchKey: scratchSpace.scratchKey,
+          expectedRevision,
+          nextMarkdown,
+          nextCursorOffset: taken.nextCursorOffset,
+          consumedAttachmentIds: taken.consumedAttachmentIds,
+        });
+
+      const recordPendingRetry = () => {
+        enqueuePendingMobileScratchConsumption({
+          consumptionId,
+          scratchEnvId: scratchSpace.environmentId,
+          scratchKey: scratchSpace.scratchKey,
+          baseMarkdown: liveState.markdown,
+          expectedRevision: liveState.revision,
+          nextMarkdown: taken.nextMarkdown,
+          nextCursorOffset: taken.nextCursorOffset,
+          consumedAttachmentIds: taken.consumedAttachmentIds,
+        });
+      };
+
+      let consumeSucceeded = false;
+      let expectedRevision = liveState.revision;
+      let markdownToCommit = taken.nextMarkdown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await sendConsume(expectedRevision, markdownToCommit)
+          .then((value) => ({ ok: true as const, value }))
+          .catch((error: unknown) => ({ ok: false as const, error }));
+        if (result.ok) {
+          removePendingMobileScratchConsumption(consumptionId);
+          scratchSpace.store.applyConsumption(result.value);
+          consumeSucceeded = true;
+          break;
+        }
+        const conflict = scratchRevisionConflictOf(result.error);
+        if (conflict === null) break;
+        expectedRevision = conflict.revision;
+        markdownToCommit = mergeScratchMarkdown3Way(
+          liveState.markdown,
+          taken.nextMarkdown,
+          conflict.markdown,
+        );
+      }
+      if (!consumeSucceeded) {
+        recordPendingRetry();
+        Dialog.alert(
+          gt("Task queued"),
+          gt("Your task was queued, but scratch could not be updated."),
+        );
+      }
+      if (readArmedScratchRange()?.scratchKey === scratchSpace.scratchKey) {
+        releaseScratchRange();
+      }
+      promptInputRef.current?.blur();
+      if (mode === "foreground") {
+        navigation.dispatch(
+          CommonActions.setParams(
+            submittedThreadParams(String(message.environmentId), String(message.threadId)),
+          ),
+        );
+      }
+    })()
+      .catch((cause) => {
+        Dialog.alert(
+          gt("Could not send selection"),
+          cause instanceof Error ? cause.message : gt("Try again once connected."),
+        );
+      })
+      .finally(() => {
+        setScratchSending(false);
+      });
+  };
+
   return (
     <>
       <ThreadScreenBinding
@@ -1030,7 +1408,32 @@ export function NewTaskDraftScreen(props: {
         draftMode={{
           content: heroViewport,
           controls: draftControls,
+          ...(armedScratchHere !== null && armedChunkPreview !== undefined
+            ? {
+                armedComposerBar: (
+                  <ScratchArmedBar
+                    title={scratchChunkPreviewTitle(
+                      armedChunkPreview.removedMarkdown,
+                      gt("Selection"),
+                    )}
+                    imageCount={armedChunkPreview.consumedAttachmentIds.length}
+                    sending={scratchSending}
+                    disabled={
+                      setupBlockReason !== null ||
+                      !canOperate ||
+                      !scratchOwnerConnected ||
+                      !canEditScratch
+                    }
+                    onRelease={releaseScratchRange}
+                    onSend={() => void handleSendArmedScratchChunk()}
+                  />
+                ),
+              }
+            : {}),
           editorRef: promptInputRef,
+          onEditorFocusChange: (focused) => {
+            promptFocusedRef.current = focused;
+          },
           sendBlockedReason: setupBlockReason,
           interactionLocked: isComposerInteractionLocked,
         }}

@@ -254,6 +254,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as ThreadNotebookService from "./notebook/ThreadNotebookService.ts";
+import * as ScratchService from "./scratch/ScratchService.ts";
 import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -1532,6 +1533,7 @@ export const layerWsRpc = (
       const usage = yield* UsageService.UsageService;
       const threadUsage = yield* ThreadUsageService.ThreadUsageService;
       const threadNotebook = yield* ThreadNotebookService.ThreadNotebookService;
+      const scratch = yield* ScratchService.Scratch;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -3135,6 +3137,21 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
         [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),
+        [WS_METHODS.scratchGet]: (input) => scratch.get(input),
+        [WS_METHODS.scratchSave]: (input) =>
+          Effect.annotateCurrentSpan({ "scratch.key": input.scratchKey }).pipe(
+            Effect.andThen(scratch.save(input)),
+          ),
+        [WS_METHODS.scratchSetCursor]: (input) => scratch.setCursor(input),
+        [WS_METHODS.scratchConsumeChunk]: (input) =>
+          Effect.annotateCurrentSpan({ "scratch.key": input.scratchKey }).pipe(
+            Effect.andThen(scratch.consumeChunk(input)),
+          ),
+        [WS_METHODS.scratchCreateImageUploadUrl]: (input) => scratch.createImageUploadUrl(input),
+        [WS_METHODS.scratchSubscribe]: (input) =>
+          Stream.unwrap(Effect.succeed(scratch.subscribe(input))),
+        [WS_METHODS.scratchSubscribeSummaries]: () =>
+          Stream.unwrap(Effect.succeed(scratch.subscribeSummaries())),
         [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,
         [WS_METHODS.agentSessionsImport]: (input) =>
           agentSessionImporter.importRecentAgentThreads(input),

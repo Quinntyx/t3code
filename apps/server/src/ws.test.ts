@@ -128,6 +128,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ScratchService from "./scratch/ScratchService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as EmailRequests from "./email/EmailRequests.ts";
 import * as Mailer from "./email/Mailer.ts";
@@ -962,6 +963,7 @@ it.live.each([
           namedProjectsRoot: process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ScratchService.Scratch)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
         Layer.mock(UsageLimitSources.UsageLimitSources)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
@@ -1105,6 +1107,7 @@ it.effect.each([
           namedProjectsRoot: process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ScratchService.Scratch)({}),
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getDescriptor: Effect.succeed({
             environmentId: EnvironmentId.make("config-test"),
@@ -1329,6 +1332,7 @@ it.effect("access changes made while the snapshot loads reach the client after i
                 namedProjectsRoot: "/unused",
               }),
               Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+              Layer.mock(ScratchService.Scratch)({}),
               Layer.mock(ServerEnvironment.ServerEnvironment)({}),
               Layer.mock(EnvironmentAuth.EnvironmentAuth)({
                 listPairingLinks: () => Effect.succeed([]),
@@ -1486,6 +1490,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({
         getDescriptor: Effect.succeed({
           environmentId: EnvironmentId.make("config-test"),
@@ -1866,6 +1871,7 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -1952,6 +1958,7 @@ it.effect("a git action that fails partway still refreshes the repository status
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -2032,6 +2039,7 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -2532,6 +2540,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
       Layer.mock(ProjectService.ProjectService)({

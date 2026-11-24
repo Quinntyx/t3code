@@ -13,6 +13,8 @@ interface WorkspaceFileDragEvent {
   readonly currentTarget: {
     contains(target: Node | null): boolean;
   };
+  readonly defaultPrevented?: boolean;
+  isDefaultPrevented?: () => boolean;
   preventDefault(): void;
 }
 
@@ -76,8 +78,9 @@ export function makeWorkspaceFileDropHandlers(host: WorkspaceFileDropHost) {
     },
     onDrop(event: WorkspaceFileDragEvent) {
       if (!isFileDrag(event)) return;
-      event.preventDefault();
       host.setDragActive(false);
+      if (event.defaultPrevented || event.isDefaultPrevented?.()) return;
+      event.preventDefault();
       const { files, folders } = splitTransferredFiles(event.dataTransfer);
       if (files.length > 0) host.addFiles(files);
       if (folders.length > 0) host.addFolders(folders);

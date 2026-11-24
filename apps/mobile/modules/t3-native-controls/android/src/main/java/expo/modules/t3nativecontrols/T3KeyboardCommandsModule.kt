@@ -43,6 +43,8 @@ class T3KeyboardCommandsView(
         "copyThreadReference"
       event.keyCode == KeyEvent.KEYCODE_H && event.isShiftPressed && !event.isAltPressed ->
         "cycleHost"
+      event.keyCode == KeyEvent.KEYCODE_E && event.isAltPressed && !event.isShiftPressed ->
+        "scratchToggle"
       else -> null
     }
   }

@@ -219,6 +219,7 @@ import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as ThreadNotebookService from "./notebook/ThreadNotebookService.ts";
+import * as ScratchService from "./scratch/ScratchService.ts";
 import * as PycellsLauncher from "./notebook/PycellsLauncher.ts";
 import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
 import * as UsageService from "./usage/UsageService.ts";
@@ -795,7 +796,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer)),
+  Layer.provideMerge(
+    Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer, ScratchService.layer),
+  ),
   Layer.provideMerge(ProviderRegistry.layer),
   Layer.provideMerge(
     ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(SqlitePersistence.layerConfig)),

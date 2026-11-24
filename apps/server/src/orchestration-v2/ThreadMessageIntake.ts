@@ -214,7 +214,7 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     const fileSystem = yield* FileSystem.FileSystem;
     // A stale view can keep a file that another client's edit dropped and deleted.
     for (const attachment of command.attachments ?? []) {
-      if (AttachmentClaims.attachmentIsPendingUpload(attachment)) continue;
+      if (AttachmentClaims.attachmentIsClaimableUpload(attachment)) continue;
       const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
       if (
         path !== null &&
@@ -281,7 +281,7 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
 ) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   yield* AttachmentClaims.validateAttachmentLimits(input.initialMessage?.attachments ?? []);
-  if (!input.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)) {
+  if (!input.initialMessage?.attachments.some(AttachmentClaims.attachmentIsClaimableUpload)) {
     return yield* launches.launch(input);
   }
   if (input.threadId === undefined) {

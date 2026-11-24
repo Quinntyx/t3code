@@ -2,6 +2,7 @@ import { msg } from "gt-react";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import {
+  type ChatImageAttachment,
   type EnvironmentId,
   type ModelSelection,
   type RuntimeMode,
@@ -96,11 +97,14 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     sendSnapshot,
     createdAt,
     attachmentsPromise,
+    extraTitleAttachments = [],
     usesAttachmentUploads,
     readFileBlockReason,
     buildOutgoingMessageContext,
     isCurrentSend,
     draftChangedDuringPreparation,
+    preserveComposerDraft = false,
+    onAccepted,
   }: {
     readonly threadId: ThreadId;
     readonly project: EnvironmentProject;
@@ -110,6 +114,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readonly sendSnapshot: ComposerSendSnapshot;
     readonly createdAt: string;
     readonly attachmentsPromise: ReturnType<typeof prepareTurnAttachments>;
+    readonly extraTitleAttachments?: ReadonlyArray<ChatImageAttachment>;
     readonly usesAttachmentUploads: boolean;
     readonly readFileBlockReason: () => string | null;
     readonly buildOutgoingMessageContext: (
@@ -118,6 +123,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     /** False once a newer send from this composer started. */
     readonly isCurrentSend: () => boolean;
     readonly draftChangedDuringPreparation: () => boolean;
+    readonly preserveComposerDraft?: boolean;
+    readonly onAccepted?: (() => void) | undefined;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
     const failedSelections: ModelSelection[] = [];
@@ -139,13 +146,15 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
         boundAttachmentIds(attachments, attachmentsSnapshot),
       );
       const title = deriveThreadTitleSeed(
-        { text: messageText, attachments: attachmentsSnapshot },
+        { text: messageText, attachments: [...extraTitleAttachments, ...attachmentsSnapshot] },
         m,
       );
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
-      clearedDraft = true;
+      if (!preserveComposerDraft) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+        clearedDraft = true;
+      }
       const clearedDraftSnapshot = useComposerDraftStore
         .getState()
         .getComposerDraft(composerDraftTarget);
@@ -223,6 +232,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
       releasedComposer = true;
       await starts;
       if (startedCount > 0) {
+        onAccepted?.();
         toastManager.add(
           stackedThreadToast({
             type: "success",
