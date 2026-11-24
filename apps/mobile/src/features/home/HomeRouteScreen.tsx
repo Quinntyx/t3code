@@ -12,6 +12,7 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 
 import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { useProjects } from "../../state/entities";
+import { useEnvironmentShellError } from "../../state/shell";
 import {
   steadyFreshEnvironmentIdsAtom,
   steadyNavigationThreadShellsAtom,
@@ -30,6 +31,7 @@ import {
 } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
+import { deriveSelectedEnvironmentEmptyState } from "./home-empty-state";
 import { useHomeListOptions } from "./home-list-options";
 import {
   runWhenHomeCovered,
@@ -131,6 +133,26 @@ export function HomeRouteScreen() {
     setSelectedProjectKey,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const selectedEnvironmentShellError = useEnvironmentShellError(selectedEnvironmentId);
+  const selectedEnvironment =
+    selectedEnvironmentId === null
+      ? null
+      : (workspaceEnvironments.find(
+          (environment) => environment.environmentId === selectedEnvironmentId,
+        ) ?? null);
+  const selectedEnvironmentUnavailable =
+    selectedEnvironment === null
+      ? null
+      : deriveSelectedEnvironmentEmptyState(
+          {
+            networkStatus: catalogState.networkStatus,
+            environment: selectedEnvironment,
+            hasFreshSnapshot: freshEnvironmentIds.has(selectedEnvironment.environmentId),
+            isActivelySyncing: syncingEnvironmentIds.has(selectedEnvironment.environmentId),
+            shellError: selectedEnvironmentShellError,
+          },
+          m,
+        );
   const projectScopes = useMemo(
     () =>
       buildHomeProjectScopes(
@@ -262,6 +284,7 @@ export function HomeRouteScreen() {
             savedConnectionsById={savedConnectionsById}
             searchQuery={searchQuery}
             selectedEnvironmentId={selectedEnvironmentId}
+            selectedEnvironmentUnavailable={selectedEnvironmentUnavailable}
             selectedProjectKey={selectedProjectKey}
             freshEnvironmentIds={freshEnvironmentIds}
             showsSkeleton={showsSkeleton}

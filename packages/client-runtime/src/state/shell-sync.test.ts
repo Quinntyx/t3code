@@ -1692,15 +1692,19 @@ describe("environment shell cold start", () => {
   );
 
   it.effect(
-    "marks shell fresh only after live sync and resets fresh on long background resume",
+    "marks shell fresh only after live sync, resets status and fresh atomically on long resume, and ignores stale completion markers",
     () =>
       Effect.gen(function* () {
         const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
         const subscriptions = yield* Queue.unbounded<Queue.Queue<OrchestrationV2ShellStreamItem>>();
+        let gateNextSubscription: Deferred.Deferred<void> | null = null;
         const client = {
           [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
             Stream.unwrap(
               Effect.gen(function* () {
+                const gate = gateNextSubscription;
+                gateNextSubscription = null;
+                if (gate !== null) yield* Deferred.await(gate);
                 const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
                 yield* Queue.offer(subscriptions, events);
                 return Stream.fromQueue(events);
@@ -1766,10 +1770,25 @@ describe("environment shell cold start", () => {
           Stream.runHead,
         );
 
-        // Long background resume resets fresh to false until the server confirms sync again.
+        // Long background resume resets both fresh and live status before the new subscription opens.
+        const resumeGate = yield* Deferred.make<void>();
+        gateNextSubscription = resumeGate;
         yield* Queue.offer(wakeups, "application-active-long");
+        const waking = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => !state.fresh),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(waking.fresh).toBe(false);
+        expect(waking.status).toBe("synchronizing");
+
+        // A delayed completion marker from the previous subscription on the same session is ignored.
+        yield* Queue.offer(probed, { kind: "synchronized" });
+        yield* Deferred.succeed(resumeGate, undefined);
         const resumed = yield* Queue.take(subscriptions);
         expect((yield* SubscriptionRef.get(shellState)).fresh).toBe(false);
+        expect((yield* SubscriptionRef.get(shellState)).status).toBe("synchronizing");
+
         yield* Queue.offer(resumed, { kind: "synchronized" });
         const synced = yield* SubscriptionRef.changes(shellState).pipe(
           Stream.filter((state) => state.status === "live" && state.fresh),
@@ -1777,6 +1796,80 @@ describe("environment shell cold start", () => {
           Effect.map(Option.getOrThrow),
         );
         expect(synced.fresh).toBe(true);
+      }),
+  );
+
+  it.effect(
+    "preserves shell stream error across automatic retries until a retry delivers server data",
+    () =>
+      Effect.gen(function* () {
+        const subscriptions = yield* Queue.unbounded<Queue.Queue<OrchestrationV2ShellStreamItem>>();
+        const client = {
+          [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
+                yield* Queue.offer(subscriptions, events);
+                return Stream.fromQueue(events);
+              }),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make(Option.some(session(client))),
+          prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        });
+        const cache = Persistence.EnvironmentCacheStore.of({
+          loadShell: () => Effect.succeedNone,
+          saveShell: () => Effect.void,
+          loadThread: () => Effect.succeedNone,
+          saveThread: () => Effect.void,
+          removeThread: () => Effect.void,
+          loadServerConfig: () => Effect.succeedNone,
+          saveServerConfig: () => Effect.void,
+          loadVcsRefs: () => Effect.succeedNone,
+          saveVcsRefs: () => Effect.void,
+          removeVcsRefs: () => Effect.void,
+          clearVcsRefs: () => Effect.void,
+          clear: () => Effect.void,
+        });
+        const shellState = yield* makeEnvironmentShellState().pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, {
+            load: () => Effect.succeedNone,
+          }),
+        );
+
+        const first = yield* Queue.take(subscriptions);
+        yield* Queue.failCause(first, Cause.fail(new Error("temporary server error") as never));
+        const failed = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => Option.isSome(state.error)),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(Option.isSome(failed.error)).toBe(true);
+
+        // Automatic retry starts without wiping the error before server data arrives.
+        yield* TestClock.adjust("250 millis");
+        const retried = yield* Queue.take(subscriptions);
+        const duringRetry = yield* SubscriptionRef.get(shellState);
+        expect(Option.isSome(duringRetry.error)).toBe(true);
+
+        yield* Queue.offerAll(retried, [
+          { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT },
+          { kind: "synchronized" },
+        ]);
+        const recovered = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => state.status === "live" && state.fresh),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(Option.isNone(recovered.error)).toBe(true);
       }),
   );
 });

@@ -10,9 +10,10 @@ import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
 } from "../settings/appearance/AppearancePreferencesProvider";
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
+import {
+  shellErrorText,
+  type EnvironmentProject,
+  type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -29,12 +30,15 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
+import { useEnvironmentShellError } from "../../state/shell";
 import {
   steadyFreshEnvironmentIdsAtom,
   steadyNavigationThreadShellsAtom,
   syncingShellEnvironmentIdsAtom,
 } from "../../state/threads";
 import { isWorkspaceEnvironmentUnavailable } from "../../state/workspaceModel";
+import { runtimeConnectionErrorText } from "../connection/environmentStatusText";
+import { deriveSelectedEnvironmentEmptyState } from "../home/home-empty-state";
 import { ThreadListSkeleton } from "./ThreadListSkeleton";
 import { filterFreshThreads, shouldShowThreadListSkeleton } from "./thread-list-skeleton-state";
 import { useThreadSearch } from "../../state/queries";
@@ -612,7 +616,8 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       (task) =>
         options.selectedEnvironmentId === null ||
         task.environmentId === options.selectedEnvironmentId,
-    );
+    ) ||
+    threadListV2Layout.settledCount > 0;
   const showsSkeleton = shouldShowThreadListSkeleton({
     isLoadingConnections: catalogState.isLoadingConnections,
     hasConnections: catalogState.hasConnections,
@@ -621,11 +626,43 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     syncingEnvironmentIds,
     hasVisibleRows: hasScopedFreshRows,
   });
+  const selectedEnvironmentShellError = useEnvironmentShellError(options.selectedEnvironmentId);
+  const selectedEnvironment =
+    options.selectedEnvironmentId === null
+      ? null
+      : (workspaceEnvironments.find(
+          (environment) => environment.environmentId === options.selectedEnvironmentId,
+        ) ?? null);
+  const selectedEnvironmentUnavailable =
+    selectedEnvironment === null
+      ? null
+      : deriveSelectedEnvironmentEmptyState(
+          {
+            networkStatus: catalogState.networkStatus,
+            environment: selectedEnvironment,
+            hasFreshSnapshot: freshEnvironmentIds.has(selectedEnvironment.environmentId),
+            isActivelySyncing: syncingEnvironmentIds.has(selectedEnvironment.environmentId),
+            shellError: selectedEnvironmentShellError,
+          },
+          messages,
+        );
   const isEnvironmentUnavailable = isWorkspaceEnvironmentUnavailable(catalogState);
+  const isAwaitingApproval =
+    isEnvironmentUnavailable &&
+    catalogState.hasAwaitingApprovalEnvironment === true &&
+    catalogState.shellSnapshotError === null;
   const showAddEnvironment =
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
+    !isAwaitingApproval &&
     (!catalogState.hasConnectingEnvironment || isEnvironmentUnavailable);
+  const workspaceUnavailableText = isAwaitingApproval
+    ? (runtimeConnectionErrorText(catalogState, messages) ?? gt("Waiting for approval on the host"))
+    : ((catalogState.shellSnapshotError !== null
+        ? shellErrorText(catalogState.shellSnapshotError, messages)
+        : null) ??
+      runtimeConnectionErrorText(catalogState, messages) ??
+      gt("Environment unavailable"));
   const listEmpty = (
     <View>
       <Text
@@ -637,21 +674,21 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       >
         {catalogState.isLoadingConnections
           ? gt("Loading threads…")
-          : isEnvironmentUnavailable
-            ? (catalogState.shellSnapshotError ??
-              catalogState.connectionError ??
-              gt("Environment unavailable"))
-            : showAddEnvironment
-              ? gt("No environments connected")
-              : props.searchQuery.trim().length > 0
-                ? threadSearch.isPending
-                  ? gt("Searching thread messages…")
-                  : threadSearch.failed
-                    ? gt("Couldn't search thread messages")
-                    : gt("No matching threads")
-                : selectedProjectScope !== null
-                  ? gt("No threads in {project}", { project: selectedProjectScope.title })
-                  : gt("No threads yet")}
+          : selectedEnvironmentUnavailable !== null
+            ? selectedEnvironmentUnavailable.detail
+            : isEnvironmentUnavailable
+              ? workspaceUnavailableText
+              : showAddEnvironment
+                ? gt("No environments connected")
+                : props.searchQuery.trim().length > 0
+                  ? threadSearch.isPending
+                    ? gt("Searching thread messages…")
+                    : threadSearch.failed
+                      ? gt("Couldn't search thread messages")
+                      : gt("No matching threads")
+                  : selectedProjectScope !== null
+                    ? gt("No threads in {project}", { project: selectedProjectScope.title })
+                    : gt("No threads yet")}
       </Text>
       {showAddEnvironment ? (
         <View className={Platform.OS === "android" ? "self-center" : "px-2"}>

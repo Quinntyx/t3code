@@ -95,7 +95,7 @@ import { useFabScroll } from "./FabScrollContext";
 import { ThreadListSkeleton } from "../threads/ThreadListSkeleton";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
-import { deriveHomeEmptyState } from "./home-empty-state";
+import { deriveHomeEmptyState, type HomeEmptyState } from "./home-empty-state";
 import { useHiddenThreads } from "./use-hidden-threads";
 
 interface HomeScreenProps {
@@ -111,6 +111,7 @@ interface HomeScreenProps {
   >;
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedEnvironmentUnavailable: Omit<HomeEmptyState, "showsAddEnvironment"> | null;
   readonly selectedProjectKey: string | null;
   readonly freshEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly showsSkeleton: boolean;
@@ -621,9 +622,15 @@ export function HomeScreen(props: HomeScreenProps) {
       ? null
       : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
         "this environment");
-  const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, m);
+  const emptyState = props.selectedEnvironmentUnavailable
+    ? {
+        ...props.selectedEnvironmentUnavailable,
+        showsAddEnvironment:
+          !props.selectedEnvironmentUnavailable.loading && !props.catalogState.hasReadyEnvironment,
+      }
+    : deriveHomeEmptyState(props.catalogState, props.projects.length, m);
 
-  if (props.showsSkeleton) {
+  if (props.showsSkeleton && threadListV2Layout.settledCount === 0) {
     return (
       <View className={containerClassName}>
         <ScreenContent surface={sidebarSurface ? "drawer" : "screen"}>
@@ -742,6 +749,19 @@ export function HomeScreen(props: HomeScreenProps) {
         detail={gt('No threads matching "{query}".', { query: props.searchQuery })}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
+    ) : props.selectedEnvironmentUnavailable !== null ? (
+      <View className="w-full max-w-[430px] items-center">
+        <EmptyState
+          title={props.selectedEnvironmentUnavailable.title}
+          detail={props.selectedEnvironmentUnavailable.detail}
+          variant={Platform.OS === "android" ? "plain" : undefined}
+        />
+        {props.selectedEnvironmentUnavailable.loading ? (
+          <View className="mt-4 items-center">
+            <AppActivityIndicator colorClassName="accent-icon-muted" />
+          </View>
+        ) : null}
+      </View>
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState
         title={gt("No threads in {name}", { name: v2ScopedProjectGroup.title })}

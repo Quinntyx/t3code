@@ -85,6 +85,7 @@ export const syncingShellEnvironmentIdsAtom = (() => {
     const freshIds = get(steadyFreshEnvironmentIdsAtom);
     const next = new Set<EnvironmentId>();
     for (const environmentId of enabledEnvironmentIds(catalog)) {
+      if (freshIds.has(environmentId)) continue;
       const connection = AsyncResult.getOrElse(
         get(environmentCatalog.stateAtom(environmentId)),
         () => AVAILABLE_CONNECTION_STATE,
@@ -94,7 +95,7 @@ export const syncingShellEnvironmentIdsAtom = (() => {
         isEnvironmentActivelySyncingShell({
           connection,
           shell,
-          isSteadyFresh: freshIds.has(environmentId),
+          isSteadyFresh: false,
         })
       ) {
         next.add(environmentId);

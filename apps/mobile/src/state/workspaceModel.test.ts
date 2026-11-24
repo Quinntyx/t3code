@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import {
   isEnvironmentActivelySyncingShell,
   isEnvironmentShellPending,
+  isSelectedEnvironmentUnavailable,
   isWorkspaceEnvironmentUnavailable,
   projectWorkspaceState,
 } from "./workspaceModel";
@@ -134,7 +135,20 @@ describe("mobile workspace projection", () => {
       expected: true,
     },
     {
-      name: "backoff state exits skeleton",
+      name: "clean first-loss backoff without failure keeps skeleton",
+      connection: {
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "backoff",
+        attempt: 1,
+        lastFailure: null,
+      } satisfies SupervisorConnectionState,
+      shell: { status: "cached" as const, error: Option.none<string>(), fresh: false },
+      isSteadyFresh: false,
+      expected: true,
+    },
+    {
+      name: "failed backoff state exits skeleton",
       connection: {
         ...AVAILABLE_CONNECTION_STATE,
         desired: true,
@@ -229,6 +243,54 @@ describe("mobile workspace projection", () => {
       expect(isEnvironmentActivelySyncingShell({ connection, shell, isSteadyFresh })).toBe(
         expected,
       );
+    },
+  );
+
+  it.each([
+    {
+      name: "blocked selected environment is unavailable",
+      phase: "error" as const,
+      hasFreshSnapshot: false,
+      isActivelySyncing: false,
+      shellError: null,
+      expected: true,
+    },
+    {
+      name: "connected selected environment with shell error is unavailable",
+      phase: "connected" as const,
+      hasFreshSnapshot: false,
+      isActivelySyncing: false,
+      shellError: "Could not synchronize environment data.",
+      expected: true,
+    },
+    {
+      name: "fresh selected environment is available",
+      phase: "connected" as const,
+      hasFreshSnapshot: true,
+      isActivelySyncing: false,
+      shellError: null,
+      expected: false,
+    },
+    {
+      name: "actively syncing selected environment is not yet unavailable",
+      phase: "connecting" as const,
+      hasFreshSnapshot: false,
+      isActivelySyncing: true,
+      shellError: null,
+      expected: false,
+    },
+  ])(
+    "isSelectedEnvironmentUnavailable: $name",
+    ({ phase, hasFreshSnapshot, isActivelySyncing, shellError, expected }) => {
+      expect(
+        isSelectedEnvironmentUnavailable({
+          networkStatus: "online",
+          environment: projectWorkspaceEnvironment(ENVIRONMENT_ID, environment(phase)),
+          hasFreshSnapshot,
+          isActivelySyncing,
+          shellError,
+        }),
+      ).toBe(expected);
     },
   );
 });

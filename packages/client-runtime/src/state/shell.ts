@@ -32,8 +32,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
-import { subscribeDynamicWithSession, subscriptionRetryDelay } from "../rpc/client.ts";
-import type { RpcSession } from "../rpc/session.ts";
+import { subscribeDynamicWithSubscription, subscriptionRetryDelay } from "../rpc/client.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
 import type { DeferredShellSnapshot } from "./shellPullRequests.ts";
 import {
@@ -114,7 +113,7 @@ const EARLY_LOAD_GRACE = "3 seconds";
 type ShellOriginIdentity = Omit<Persistence.ShellCacheOrigin, "snapshotAt">;
 
 interface ShellSubscription {
-  readonly session: RpcSession;
+  readonly token: object;
   /** What a snapshot from this subscription descends from; null when the server did not say. */
   readonly identity: ShellOriginIdentity | null;
 }
@@ -286,6 +285,16 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     status: "synchronizing" as const,
     error: Option.none(),
   }));
+  // Automatic retries on an already-connected socket keep an active stream error visible until
+  // server data arrives, so persistent shell failures do not oscillate back to loading skeletons.
+  const markSynchronizingPreservingError = SubscriptionRef.update(state, (current) =>
+    current.status === "synchronizing"
+      ? current
+      : {
+          ...current,
+          status: "synchronizing" as const,
+        },
+  );
   const setReady = SubscriptionRef.update(state, (current) =>
     current.status === "live"
       ? current
@@ -439,13 +448,13 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   });
 
   const applyItems = Effect.fn("EnvironmentShellState.applyItems")(function* (
-    entries: ReadonlyArray<readonly [RpcSession, OrchestrationV2ShellStreamItem]>,
+    entries: ReadonlyArray<readonly [object, OrchestrationV2ShellStreamItem]>,
   ) {
-    // Read under the lock: items buffered across a session change must not land on the
-    // rows the next session loaded.
+    // Read under the lock: items buffered across a session or resubscribe change must not land on
+    // the rows the next subscription loaded.
     const subscription = yield* Ref.get(activeSubscription);
     yield* applyLocked(
-      entries.flatMap(([session, item]) => (session === subscription?.session ? [item] : [])),
+      entries.flatMap(([token, item]) => (token === subscription?.token ? [item] : [])),
       subscription?.identity ?? null,
     );
   }, snapshotWriteLock.withPermit);
@@ -641,10 +650,17 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           Stream.tap((reason) =>
             reason === "application-active-long"
               ? snapshotWriteLock.withPermit(
-                  Ref.set(awaitingCompletion, true).pipe(
+                  Ref.set(activeSubscription, null).pipe(
+                    Effect.andThen(Ref.set(awaitingCompletion, true)),
                     Effect.andThen(
                       SubscriptionRef.update(state, (current) =>
-                        current.fresh ? { ...current, fresh: false } : current,
+                        current.fresh || current.status === "live"
+                          ? {
+                              ...current,
+                              fresh: false,
+                              status: current.status === "live" ? "synchronizing" : current.status,
+                            }
+                          : current,
                       ),
                     ),
                   ),
@@ -657,9 +673,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* setSynchronizing;
   yield* Effect.forkScoped(
-    subscribeDynamicWithSession(
+    subscribeDynamicWithSubscription(
       ORCHESTRATION_V2_WS_METHODS.subscribeShell,
-      Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
+      Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session, token) {
         const identity = yield* session.initialConfig.pipe(
           Effect.map((config) => shellIdentity(config.environment, config)),
           Effect.orElseSucceed(() => null),
@@ -683,9 +699,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           sameShellIdentity(early.identity, identity)
             ? earlyExit.value
             : null;
-        yield* Ref.set(activeSubscription, { session, identity });
+        yield* Ref.set(activeSubscription, { token, identity });
         yield* Ref.set(awaitingCompletion, true);
-        yield* setSynchronizing;
+        yield* markSynchronizingPreservingError;
 
         // Rows from a recent server snapshot with the same omissions and server build resume
         // from their cursor, in memory or from the cache. Anything else reloads the HTTP
@@ -758,8 +774,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     ),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
-    Stream.runForEach((connectionState) => {
-      switch (connectionProjectionPhase(connectionState)) {
+    Stream.map(connectionProjectionPhase),
+    Stream.changes,
+    Stream.runForEach((phase) => {
+      switch (phase) {
         case "synchronizing":
           return setSynchronizing;
         case "disconnected":

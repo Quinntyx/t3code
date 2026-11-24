@@ -23,6 +23,7 @@ export interface WorkspaceConnectionState {
   readonly hasConnections: boolean;
   readonly hasReadyEnvironment: boolean;
   readonly hasConnectingEnvironment: boolean;
+  readonly hasAwaitingApprovalEnvironment?: boolean;
   readonly connectingEnvironments: ReadonlyArray<WorkspaceEnvironment>;
   readonly connectionState: EnvironmentConnectionPhase;
   readonly connectionError: string | null;
@@ -94,6 +95,9 @@ export function projectWorkspaceConnectionState(input: {
       input.networkStatus !== "offline" &&
       activeEnvironments.some((environment) => environment.connectionState === "connected"),
     hasConnectingEnvironment: connectingEnvironments.length > 0,
+    hasAwaitingApprovalEnvironment: activeEnvironments.some(
+      (environment) => environment.awaitingApproval === true,
+    ),
     connectingEnvironments,
     connectionState: overallConnectionState(activeEnvironments, input.networkStatus),
     connectionError: failedEnvironment?.connectionError ?? null,
@@ -143,7 +147,7 @@ export function isEnvironmentActivelySyncingShell(input: {
   if (input.isSteadyFresh) return false;
   if (Option.isSome(input.shell.error)) return false;
   if (input.connection === AVAILABLE_CONNECTION_STATE) return true;
-  if (input.connection.phase === "connecting") {
+  if (input.connection.phase === "connecting" || input.connection.phase === "backoff") {
     return input.connection.lastFailure === null;
   }
   if (input.connection.phase === "connected") {
@@ -154,6 +158,35 @@ export function isEnvironmentActivelySyncingShell(input: {
     );
   }
   return false;
+}
+
+export interface ScopedEnvironmentUnavailableInput {
+  readonly networkStatus: NetworkStatus;
+  readonly environment: WorkspaceEnvironment;
+  readonly hasFreshSnapshot: boolean;
+  readonly isActivelySyncing: boolean;
+  readonly shellError: string | null;
+}
+
+/**
+ * True when a selected environment has no fresh displayed data, no clean connect/sync is in
+ * flight, and it is disabled, offline, blocked, in failed backoff, or hit a shell sync error.
+ */
+export function isSelectedEnvironmentUnavailable(
+  input: ScopedEnvironmentUnavailableInput,
+): boolean {
+  if (input.hasFreshSnapshot || input.isActivelySyncing) return false;
+  if (input.shellError !== null) return true;
+  if (!input.environment.isEnabled) return true;
+  return (
+    input.networkStatus === "offline" ||
+    input.environment.connectionState === "available" ||
+    input.environment.connectionState === "offline" ||
+    input.environment.connectionState === "error" ||
+    input.environment.connectionState === "unsupported" ||
+    (input.environment.connectionState === "reconnecting" &&
+      input.environment.connectionError !== null)
+  );
 }
 
 /**

@@ -296,10 +296,14 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
 
 function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   tag: TTag,
-  makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  makeInput: (
+    session: RpcSession,
+    subscription: object,
+  ) => Effect.Effect<EnvironmentRpcInput<TTag>>,
   mapStream: (
     session: RpcSession,
     stream: Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>,
+    subscription: object,
   ) => Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>>,
   options?: SubscriptionOptions<TTag>,
 ): Stream.Stream<
@@ -343,7 +347,8 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                 Stream.suspend(() =>
                   Stream.unwrap(
                     Effect.gen(function* () {
-                      const input = yield* makeInput(session);
+                      const subscription = {};
+                      const input = yield* makeInput(session, subscription);
                       const completeObservation = yield* observer.observe({
                         environmentId: supervisor.target.environmentId,
                         method: tag,
@@ -352,6 +357,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       const stream = mapStream(
                         session,
                         Stream.suspend(() => method(input)),
+                        subscription,
                       ).pipe(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
@@ -502,6 +508,28 @@ export function subscribeDynamicWithSession<TTag extends EnvironmentSubscription
     tag,
     makeInput,
     (session, stream) => stream.pipe(Stream.map((value) => [session, value] as const)),
+    options,
+  );
+}
+
+/** Tags each value with its subscription attempt so same-session resubscribes ignore buffered items from the prior stream. */
+export function subscribeDynamicWithSubscription<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  makeInput: (
+    session: RpcSession,
+    subscription: object,
+  ) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  options?: SubscriptionOptions<TTag>,
+): Stream.Stream<
+  readonly [subscription: object, value: EnvironmentRpcStreamValue<TTag>],
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor.EnvironmentSupervisor
+> {
+  return subscribeDynamicMapped(
+    tag,
+    makeInput,
+    (_session, stream, subscription) =>
+      stream.pipe(Stream.map((value) => [subscription, value] as const)),
     options,
   );
 }
