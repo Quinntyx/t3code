@@ -848,7 +848,7 @@ export function createEnvironmentShellSummaryAtom(input: {
 
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const state = get(input.shellStateValueAtom(environmentId));
-      hasSynchronizingShell ||= state.status === "synchronizing";
+      hasSynchronizingShell ||= state.status === "synchronizing" && Option.isNone(state.error);
       if (firstError === null) {
         firstError = Option.getOrNull(state.error);
       }

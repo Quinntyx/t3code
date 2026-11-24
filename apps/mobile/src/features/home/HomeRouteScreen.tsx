@@ -20,6 +20,7 @@ import {
 } from "../../state/threads";
 import {
   filterFreshThreads,
+  hasScopedFreshThreadListRows,
   shouldShowThreadListSkeleton,
 } from "../threads/thread-list-skeleton-state";
 import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -181,22 +182,21 @@ export function HomeRouteScreen() {
     [projectScopes, threads],
   );
   const { showHidden, setShowHidden } = useHiddenThreads();
-  const selectedProjectKey =
-    resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
-  const hasScopedFreshRows =
-    threads.some(
-      (thread) =>
-        thread.archivedAt === null &&
-        (selectedEnvironmentId === null || thread.environmentId === selectedEnvironmentId),
-    ) ||
-    pendingTasks.some(
-      (task) => selectedEnvironmentId === null || task.environmentId === selectedEnvironmentId,
-    );
+  const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, listOptions);
+  const selectedProjectKey = selectedProjectScope?.key ?? null;
+  const selectedProjectRefs = selectedProjectScope?.projectRefs ?? null;
+  const hasScopedFreshRows = hasScopedFreshThreadListRows({
+    threads,
+    pendingTasks,
+    selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
+  });
   const showsSkeleton = shouldShowThreadListSkeleton({
     isLoadingConnections: catalogState.isLoadingConnections,
     hasConnections: catalogState.hasConnections,
     networkStatus: catalogState.networkStatus,
     selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
     syncingEnvironmentIds,
     hasVisibleRows: hasScopedFreshRows,
   });

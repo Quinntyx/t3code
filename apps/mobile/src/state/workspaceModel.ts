@@ -79,9 +79,9 @@ export function projectWorkspaceConnectionState(input: {
   readonly environments: ReadonlyArray<WorkspaceEnvironment>;
 }): WorkspaceConnectionState {
   const activeEnvironments = input.environments.filter((environment) => environment.isEnabled);
-  const failedEnvironment = activeEnvironments.find(
-    (environment) => environment.connectionError !== null,
-  );
+  const failedEnvironment =
+    activeEnvironments.find((environment) => environment.connectionError !== null) ??
+    activeEnvironments.find((environment) => environment.awaitingApproval === true);
   const connectingEnvironments = activeEnvironments.filter(
     (environment) =>
       environment.connectionState === "connecting" ||
@@ -95,9 +95,7 @@ export function projectWorkspaceConnectionState(input: {
       input.networkStatus !== "offline" &&
       activeEnvironments.some((environment) => environment.connectionState === "connected"),
     hasConnectingEnvironment: connectingEnvironments.length > 0,
-    hasAwaitingApprovalEnvironment: activeEnvironments.some(
-      (environment) => environment.awaitingApproval === true,
-    ),
+    hasAwaitingApprovalEnvironment: failedEnvironment?.awaitingApproval === true,
     connectingEnvironments,
     connectionState: overallConnectionState(activeEnvironments, input.networkStatus),
     connectionError: failedEnvironment?.connectionError ?? null,
@@ -130,6 +128,7 @@ export function projectWorkspaceState(input: {
 
 // The atom starts at EMPTY_SHELL_STATE itself; any state after the cache read is a new object.
 export function isEnvironmentShellPending(state: EnvironmentShellState): boolean {
+  if (Option.isSome(state.error)) return false;
   return state === EMPTY_SHELL_STATE || state.status === "synchronizing";
 }
 
@@ -208,11 +207,12 @@ export function isWorkspaceEnvironmentUnavailable(state: WorkspaceState): boolea
   );
 }
 
-// Reconnecting environments keep their last failure, so an error alone does not end the wait.
+// Only active clean attempts and healthy connected syncs keep the catalog pending; failed backoff
+// retries and errored shell subscriptions settle into unavailable or empty states.
 export function isWorkspaceCatalogPending(state: WorkspaceState): boolean {
   return (
     state.networkStatus !== "offline" &&
-    (state.hasConnectingEnvironment || state.hasSyncingConnectedEnvironment)
+    (state.hasActivelySyncingEnvironment || state.hasSyncingConnectedEnvironment)
   );
 }
 

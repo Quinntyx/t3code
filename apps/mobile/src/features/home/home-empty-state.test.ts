@@ -90,15 +90,28 @@ describe("home empty state", () => {
       { title: "Loading threads", loading: true, showsAddEnvironment: false },
     ],
     [
-      "waits while another environment is still connecting after one loaded empty",
+      "waits while another environment is actively connecting after one loaded empty",
       workspaceState({
+        hasActivelySyncingEnvironment: true,
         hasPendingShellSnapshot: true,
+        hasConnectingEnvironment: true,
+        connectingEnvironments: [connectingEnvironment("connecting", null)],
+      }),
+      0,
+      { title: "Loading threads", loading: true, showsAddEnvironment: false },
+    ],
+    [
+      "does not spin indefinitely when one environment is fresh empty and another sits in failed backoff",
+      workspaceState({
+        hasActivelySyncingEnvironment: false,
+        hasPendingShellSnapshot: false,
+        hasSyncingConnectedEnvironment: false,
         hasConnectingEnvironment: true,
         connectingEnvironments: [reconnecting],
         connectionError: RETAINED_FAILURE,
       }),
       0,
-      { title: "Loading threads", loading: true, showsAddEnvironment: false },
+      { title: "No projects found", loading: false, showsAddEnvironment: false },
     ],
     [
       "reports no threads once every environment has resolved",

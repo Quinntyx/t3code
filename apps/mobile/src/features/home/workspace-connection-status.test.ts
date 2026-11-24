@@ -87,4 +87,15 @@ describe("workspace connection status", () => {
       showsProgress: true,
     });
   });
+
+  it("does not show a loading header banner when a connected environment has a shell sync error", () => {
+    const state = workspaceState({
+      hasFreshShellSnapshot: false,
+      hasPendingShellSnapshot: false,
+      hasSyncingConnectedEnvironment: false,
+      shellSnapshotError: "Could not synchronize environment data.",
+    });
+
+    expect(workspaceConnectionStatusPresentation(state)).toBeNull();
+  });
 });

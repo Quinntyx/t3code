@@ -40,7 +40,11 @@ import { isWorkspaceEnvironmentUnavailable } from "../../state/workspaceModel";
 import { runtimeConnectionErrorText } from "../connection/environmentStatusText";
 import { deriveSelectedEnvironmentEmptyState } from "../home/home-empty-state";
 import { ThreadListSkeleton } from "./ThreadListSkeleton";
-import { filterFreshThreads, shouldShowThreadListSkeleton } from "./thread-list-skeleton-state";
+import {
+  filterFreshThreads,
+  hasScopedFreshThreadListRows,
+  shouldShowThreadListSkeleton,
+} from "./thread-list-skeleton-state";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { useThreadListNow } from "./use-thread-list-now";
@@ -605,24 +609,20 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
-  const hasScopedFreshRows =
-    launchingThreads.some(
-      (thread) =>
-        thread.archivedAt === null &&
-        (options.selectedEnvironmentId === null ||
-          thread.environmentId === options.selectedEnvironmentId),
-    ) ||
-    pendingTasks.some(
-      (task) =>
-        options.selectedEnvironmentId === null ||
-        task.environmentId === options.selectedEnvironmentId,
-    ) ||
-    threadListV2Layout.settledCount > 0;
+  const selectedProjectRefs = selectedProjectScope?.projectRefs ?? null;
+  const hasScopedFreshRows = hasScopedFreshThreadListRows({
+    threads: launchingThreads,
+    pendingTasks,
+    selectedEnvironmentId: options.selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
+    settledCount: threadListV2Layout.settledCount,
+  });
   const showsSkeleton = shouldShowThreadListSkeleton({
     isLoadingConnections: catalogState.isLoadingConnections,
     hasConnections: catalogState.hasConnections,
     networkStatus: catalogState.networkStatus,
     selectedEnvironmentId: options.selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
     syncingEnvironmentIds,
     hasVisibleRows: hasScopedFreshRows,
   });
@@ -655,6 +655,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
     !isAwaitingApproval &&
+    !selectedEnvironmentUnavailable?.loading &&
     (!catalogState.hasConnectingEnvironment || isEnvironmentUnavailable);
   const workspaceUnavailableText = isAwaitingApproval
     ? (runtimeConnectionErrorText(catalogState, messages) ?? gt("Waiting for approval on the host"))

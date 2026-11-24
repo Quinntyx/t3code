@@ -20,6 +20,8 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import { RpcClientError } from "effect/rpc";
+import * as Socket from "effect/socket/Socket";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -1870,6 +1872,25 @@ describe("environment shell cold start", () => {
           Effect.map(Option.getOrThrow),
         );
         expect(Option.isNone(recovered.error)).toBe(true);
+
+        // Repeated transport failures on a connected socket also surface shell.error after retry.
+        const transportFailure = Cause.fail(
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }) as never,
+        );
+        yield* Queue.failCause(retried, transportFailure);
+        yield* TestClock.adjust("250 millis");
+        const transportRetry = yield* Queue.take(subscriptions);
+        expect(Option.isNone((yield* SubscriptionRef.get(shellState)).error)).toBe(true);
+
+        yield* Queue.failCause(transportRetry, transportFailure);
+        const transportFailed = yield* SubscriptionRef.changes(shellState).pipe(
+          Stream.filter((state) => Option.isSome(state.error)),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(Option.isSome(transportFailed.error)).toBe(true);
       }),
   );
 });

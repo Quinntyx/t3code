@@ -729,7 +729,20 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const v2ListEmpty =
-    hasSearchQuery && threadSearch.isPending ? (
+    props.selectedEnvironmentUnavailable !== null ? (
+      <View className="w-full max-w-[430px] items-center">
+        <EmptyState
+          title={props.selectedEnvironmentUnavailable.title}
+          detail={props.selectedEnvironmentUnavailable.detail}
+          variant={Platform.OS === "android" ? "plain" : undefined}
+        />
+        {props.selectedEnvironmentUnavailable.loading ? (
+          <View className="mt-4 items-center">
+            <AppActivityIndicator colorClassName="accent-icon-muted" />
+          </View>
+        ) : null}
+      </View>
+    ) : hasSearchQuery && threadSearch.isPending ? (
       <EmptyState
         title={gt("Searching thread messages…")}
         detail={gt('Looking for "{query}" in messages.', { query: props.searchQuery })}
@@ -749,19 +762,6 @@ export function HomeScreen(props: HomeScreenProps) {
         detail={gt('No threads matching "{query}".', { query: props.searchQuery })}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
-    ) : props.selectedEnvironmentUnavailable !== null ? (
-      <View className="w-full max-w-[430px] items-center">
-        <EmptyState
-          title={props.selectedEnvironmentUnavailable.title}
-          detail={props.selectedEnvironmentUnavailable.detail}
-          variant={Platform.OS === "android" ? "plain" : undefined}
-        />
-        {props.selectedEnvironmentUnavailable.loading ? (
-          <View className="mt-4 items-center">
-            <AppActivityIndicator colorClassName="accent-icon-muted" />
-          </View>
-        ) : null}
-      </View>
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState
         title={gt("No threads in {name}", { name: v2ScopedProjectGroup.title })}

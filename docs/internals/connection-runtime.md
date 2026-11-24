@@ -20,11 +20,13 @@ Foregrounding, a network change, an explicit retry, and an offline report probe
 the established session, and only a failed probe reconnects. Offline reports are
 often wrong, for example for a loopback server. The OS can kill a suspended
 socket without a close event, so a probe still unanswered after 500 ms asks the
-host for its public descriptor over a fresh request, again each second until it
-answers. If the host answers while the socket delivers no frame, the socket is
-dead and is replaced, even while the network reports offline: at once on
-loopback and LAN, and 2.5 seconds after the check starts elsewhere, where one
-lost packet can stall a live socket. Without that evidence the probe deadline
+host for its public descriptor over a fresh request, retrying every 250 ms after
+a long mobile suspension and every second otherwise until it answers. If the
+host answers while the socket delivers no frame, the socket is dead and is
+replaced, even while the network reports offline: at once on loopback and LAN,
+and 2.5 seconds after the check starts elsewhere, where one lost packet can
+stall a live socket. The replacement connect tries the route that just answered
+first without re-checking it, while still running normal host verification. Without that evidence the probe deadline
 decides: 3 seconds on loopback and LAN routes and after a long mobile
 suspension, when the data on screen is stale; 15 seconds elsewhere, because a
 tailnet over DERP or a VPN can be slower than that on a live socket. A long
@@ -101,10 +103,10 @@ delete, and their reverses) makes that environment's rows follow the live snapsh
 until it is live. Point reads (a
 thread's own shell, route checks) keep the live snapshot, where a row the server just
 sent must not look missing. The decision reads the snapshot's own sequence: a second
-atom derived from the same shell state can be one update behind the rows. The mobile
-splash screen also waits, for a bounded time, until every enabled environment has
-read its cached shell and Home's list has laid out those rows, so the first frame
-holds all cached rows.
+atom derived from the same shell state can be one update behind the rows. Mobile
+lists keep cached snapshots on disk for delta resume, but hide unverified rows
+behind skeletons on cold launch and after a long background suspension until
+each environment's displayed steady snapshot is fresh in the current session.
 
 Shell snapshots can leave rows out when the client asks. Servers that advertise
 `shellThreadFamilies` leave out idle subagent children: a child stays while it

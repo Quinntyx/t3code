@@ -40,6 +40,7 @@ export function ThreadListSkeleton(props: {
   return (
     <View
       testID="thread-list-skeleton"
+      accessible
       accessibilityRole="progressbar"
       accessibilityLabel={gt("Loading threads…")}
       className="flex-1"
@@ -49,6 +50,7 @@ export function ThreadListSkeleton(props: {
         <View
           key={row.id}
           accessible={false}
+          accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           style={
             android

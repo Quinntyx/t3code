@@ -190,6 +190,43 @@ describe("ConnectionDriver", () => {
         expect(yield* Ref.get(checked)).not.toContain("first");
         expect(yield* Ref.get(checked)).toContain("second");
         expect(yield* Ref.get(attempted)).toEqual(["first", "second"]);
+
+        // Two-route fallback: when the skipped first route fails transiently, the lone remaining
+        // route still runs its check and is skipped if silent rather than dialed unchecked.
+        const twoRouteChecked = yield* Ref.make<ReadonlyArray<string>>([]);
+        const twoRouteAttempted = yield* Ref.make<ReadonlyArray<string>>([]);
+        const twoRouteEntry: ConnectionCatalogEntry = {
+          target: sshTarget("tailscale"),
+          profile: Option.none(),
+          enabled: true,
+          alternateRoutes: [{ target: sshTarget("dead-lan"), profile: Option.none() }],
+        };
+        const twoRouteError = yield* ConnectionDriver.connectOverRoutes(
+          twoRouteEntry,
+          (route) =>
+            Ref.update(twoRouteChecked, (all) => [
+              ...all,
+              (route.target as SshConnectionTarget).connectionId,
+            ]).pipe(Effect.as<ConnectionDriver.RouteCheck>("silent")),
+          (route) => {
+            const id = (route.target as SshConnectionTarget).connectionId;
+            return Ref.update(twoRouteAttempted, (all) => [...all, id]).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ConnectionTransientError({
+                    reason: "transport",
+                    detail: "Socket closed.",
+                  }),
+                ),
+              ),
+            );
+          },
+          { skipRouteCheckForId: "tailscale" },
+        ).pipe(Effect.scoped, Effect.flip);
+
+        expect(twoRouteError.reason).toBe("transport");
+        expect(yield* Ref.get(twoRouteChecked)).toEqual(["dead-lan"]);
+        expect(yield* Ref.get(twoRouteAttempted)).toEqual(["tailscale"]);
       }),
   );
 });

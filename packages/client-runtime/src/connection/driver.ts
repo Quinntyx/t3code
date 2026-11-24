@@ -132,7 +132,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     routes = allRoutes.slice(1);
   }
   const checks =
-    routes.length <= 1
+    allRoutes.length <= 1
       ? []
       : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
   const headStart =

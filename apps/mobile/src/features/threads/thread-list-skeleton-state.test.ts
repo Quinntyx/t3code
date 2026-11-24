@@ -1,10 +1,16 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { filterFreshThreads, shouldShowThreadListSkeleton } from "./thread-list-skeleton-state";
+import {
+  filterFreshThreads,
+  hasScopedFreshThreadListRows,
+  shouldShowThreadListSkeleton,
+} from "./thread-list-skeleton-state";
 
 const ENV_A = EnvironmentId.make("env-a");
 const ENV_B = EnvironmentId.make("env-b");
+const PROJECT_1 = ProjectId.make("project-1");
+const PROJECT_2 = ProjectId.make("project-2");
 
 describe("filterFreshThreads", () => {
   it("drops cached threads from environments that have not synced yet", () => {
@@ -101,6 +107,37 @@ describe("shouldShowThreadListSkeleton", () => {
         networkStatus: "offline" as const,
         selectedEnvironmentId: null,
         syncingEnvironmentIds: new Set<EnvironmentId>([ENV_A]),
+        hasVisibleRows: false,
+      },
+      expected: false,
+    },
+    {
+      name: "shows skeleton when a selected project's environment is still syncing even if another environment has fresh rows elsewhere",
+      input: {
+        isLoadingConnections: false,
+        hasConnections: true,
+        networkStatus: "online" as const,
+        selectedEnvironmentId: null,
+        projectRefs: [{ environmentId: ENV_B, projectId: PROJECT_2 }],
+        syncingEnvironmentIds: new Set<EnvironmentId>([ENV_B]),
+        hasVisibleRows: hasScopedFreshThreadListRows({
+          threads: [{ archivedAt: null, environmentId: ENV_A, projectId: PROJECT_1 }],
+          pendingTasks: [],
+          selectedEnvironmentId: null,
+          projectRefs: [{ environmentId: ENV_B, projectId: PROJECT_2 }],
+        }),
+      },
+      expected: true,
+    },
+    {
+      name: "hides skeleton when a selected project belongs only to fresh environments while another environment syncs",
+      input: {
+        isLoadingConnections: false,
+        hasConnections: true,
+        networkStatus: "online" as const,
+        selectedEnvironmentId: null,
+        projectRefs: [{ environmentId: ENV_A, projectId: PROJECT_1 }],
+        syncingEnvironmentIds: new Set<EnvironmentId>([ENV_B]),
         hasVisibleRows: false,
       },
       expected: false,

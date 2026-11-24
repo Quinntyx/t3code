@@ -99,6 +99,40 @@ describe("mobile workspace projection", () => {
     expect(
       isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, error: Option.some("Cache failed.") }),
     ).toBe(false);
+    expect(
+      isEnvironmentShellPending({
+        ...EMPTY_SHELL_STATE,
+        status: "synchronizing",
+        error: Option.some("Could not synchronize environment data."),
+      }),
+    ).toBe(false);
+  });
+
+  it("pairs workspace approval status with the same environment that supplies connectionError", () => {
+    const failedEnv = projectWorkspaceEnvironment(ENVIRONMENT_ID, environment("error"));
+    const approvalEnvId = EnvironmentId.make("environment-2");
+    const approvalPresentation = environment("reconnecting");
+    const approvalEnv = projectWorkspaceEnvironment(approvalEnvId, {
+      ...approvalPresentation,
+      connection: {
+        phase: "reconnecting",
+        error: "Approve this device on host 2.",
+        traceId: null,
+        awaitingApproval: true,
+      },
+    });
+    const state = projectWorkspaceState({
+      isReady: true,
+      networkStatus: "online",
+      environments: [failedEnv, approvalEnv],
+      shellSummary: EMPTY_SHELL_SUMMARY,
+      hasFreshShellSnapshot: false,
+      hasActivelySyncingEnvironment: false,
+      hasSyncingConnectedEnvironment: false,
+    });
+
+    expect(state.connectionError).toBe("Connection failed.");
+    expect(state.hasAwaitingApprovalEnvironment).toBe(false);
   });
 
   it("keeps retained snapshots visible while reconnecting without claiming readiness", () => {

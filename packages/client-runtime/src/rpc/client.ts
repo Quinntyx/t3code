@@ -425,6 +425,16 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         resubscribesOnSameSession &&
                         (isTransportFailure || isChunkDecodeDefect)
                       ) {
+                        const retries = streamFailureRetries++;
+                        // Leave the first transport failure silent so a normal socket close does
+                        // not flash a stream error before the supervisor drops the session, then
+                        // surface persistent same-session failures.
+                        const reportFailure =
+                          isTransportFailure &&
+                          retries > 0 &&
+                          options?.onExpectedFailure !== undefined
+                            ? options.onExpectedFailure(cause)
+                            : Effect.void;
                         return Stream.fromEffect(
                           Effect.logWarning(
                             "Durable RPC subscription stream ended; resubscribing.",
@@ -433,13 +443,13 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                               method: tag,
                               environmentId: supervisor.target.environmentId,
                             },
-                          ),
+                          ).pipe(Effect.andThen(reportFailure)),
                         ).pipe(
                           Stream.drain,
                           Stream.concat(
                             retryAfter(
                               options?.retryExpectedFailureAfter ?? STREAM_FAILURE_RETRY_DELAY,
-                              streamFailureRetries++,
+                              retries,
                             ),
                           ),
                         );
