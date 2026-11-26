@@ -260,6 +260,33 @@ function previewTabIdOf(
 
 type TabAudioState = "none" | "audible" | "muted";
 
+/**
+ * Stays disabled until the state the mute command reads has arrived: a server session id can
+ * resolve while the preview manager's createTab is still in flight, and muting then fails with a
+ * PreviewTabNotFoundError nothing surfaces to the user.
+ */
+function tabMuteMenuItem(
+  input: {
+    overlay: DesktopPreviewOverlay | null;
+    canResolveRuntimeTabId: boolean;
+    streamedTabId: string | null;
+    muted: boolean;
+    unavailable: boolean;
+  },
+  resolve: MessageResolver = m,
+): { label: string; disabled: boolean } {
+  return {
+    label: input.unavailable
+      ? resolve(msg("Audio unavailable for this page"))
+      : input.muted
+        ? resolve(msg("Unmute tab"))
+        : resolve(msg("Mute tab")),
+    disabled:
+      input.unavailable ||
+      (input.streamedTabId === null && (input.overlay === null || !input.canResolveRuntimeTabId)),
+  };
+}
+
 function tabAudioState(overlay: DesktopPreviewOverlay | null): TabAudioState {
   if (!overlay?.audible) return "none";
   return overlay.audioMuted ? "muted" : "audible";
@@ -1397,15 +1424,16 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       });
       items.push({
         id: "toggle-mute",
-        label: unavailable
-          ? gt("Audio unavailable for this page")
-          : menuMuted
-            ? gt("Unmute tab")
-            : gt("Mute tab"),
-        disabled:
-          unavailable ||
-          (menuStreamedTabId === null &&
-            (menuOverlay === null || props.previewRuntimeTabId === undefined)),
+        ...tabMuteMenuItem(
+          {
+            overlay: menuOverlay,
+            canResolveRuntimeTabId: props.previewRuntimeTabId !== undefined,
+            streamedTabId: menuStreamedTabId,
+            muted: menuMuted,
+            unavailable,
+          },
+          messages,
+        ),
       });
     }
     items.push(

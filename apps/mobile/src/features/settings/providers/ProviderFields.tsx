@@ -141,7 +141,7 @@ const STORED_VALUE = "__stored__";
  * A sensitive value saved on the server, or, once the environment has secret providers, a
  * reference the server resolves from one of them.
  */
-export function SecretValueInput(props: {
+function SecretValueInput(props: {
   readonly accessibilityLabel: string;
   readonly value: string | SecretReference | undefined;
   /** A value is saved but redacted, so it never comes back to the app. */

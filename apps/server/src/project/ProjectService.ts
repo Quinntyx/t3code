@@ -536,15 +536,12 @@ export const make = Effect.gen(function* () {
           (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
         ),
       );
-    const exact = yield* normalizeWorkspaceRoot({
-      workspaceRoot,
-      resolveMainCheckout: false,
-    });
+    const exact = yield* normalizeWorkspaceRoot({ workspaceRoot });
     const exactRow = yield* findRow(exact);
     if (Option.isSome(exactRow)) {
       return Option.some(yield* hydrate(exactRow.value));
     }
-    const resolved = yield* normalizeWorkspaceRoot({ workspaceRoot });
+    const resolved = yield* normalizeWorkspaceRoot({ workspaceRoot, resolveMainCheckout: true });
     if (resolved === exact) return Option.none();
     const row = yield* findRow(resolved);
     return Option.isNone(row) ? Option.none() : Option.some(yield* hydrate(row.value));
@@ -881,6 +878,7 @@ export const make = Effect.gen(function* () {
           const workspaceRoot = yield* normalizeWorkspaceRoot({
             projectId: row.projectId,
             workspaceRoot: row.workspaceRoot,
+            resolveMainCheckout: true,
           }).pipe(Effect.orElseSucceed(() => row.workspaceRoot));
           if (workspaceRoot === row.workspaceRoot) return;
           yield* update({

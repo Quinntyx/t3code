@@ -630,7 +630,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           return yield* new AssetWorkspaceContextNotFoundError({ resource: input.resource });
         }
         const workspaceRoot = yield* workspacePaths
-          .normalizeWorkspaceRoot(input.workspaceRoot, { resolveMainCheckout: false })
+          .normalizeWorkspaceRoot(input.workspaceRoot)
           .pipe(
             Effect.mapError(
               (cause) =>
@@ -657,17 +657,15 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      const workspaceRoot = yield* workspacePaths
-        .normalizeWorkspaceRoot(input.workspaceRoot, { resolveMainCheckout: false })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AssetWorkspaceRootNormalizationError({
-                resource: input.resource,
-                cause,
-              }),
-          ),
-        );
+      const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.workspaceRoot).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AssetWorkspaceRootNormalizationError({
+              resource: input.resource,
+              cause,
+            }),
+        ),
+      );
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
         requestedPath: input.resource.path,
@@ -699,17 +697,15 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         fileRevision = finalized.fileRevision;
         break;
       }
-      const workspaceRoot = yield* workspacePaths
-        .normalizeWorkspaceRoot(draftWorkspaceRoot, { resolveMainCheckout: false })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AssetWorkspaceRootNormalizationError({
-                resource: input.resource,
-                cause,
-              }),
-          ),
-        );
+      const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(draftWorkspaceRoot).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AssetWorkspaceRootNormalizationError({
+              resource: input.resource,
+              cause,
+            }),
+        ),
+      );
       const finalized = yield* finalizeWorkspaceFileAsset({
         workspaceRoot,
         requestedPath: input.resource.path,
@@ -769,17 +765,15 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       break;
     }
     case "project-favicon": {
-      const workspaceRoot = yield* workspacePaths
-        .normalizeWorkspaceRoot(input.resource.cwd, { resolveMainCheckout: false })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AssetWorkspaceRootNormalizationError({
-                resource: input.resource,
-                cause,
-              }),
-          ),
-        );
+      const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.resource.cwd).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AssetWorkspaceRootNormalizationError({
+              resource: input.resource,
+              cause,
+            }),
+        ),
+      );
       const faviconResolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
       // A lookup in a half-cloned checkout would cache a miss that outlives the clone.
       // Once it lands, a miss cached before (by enrichment) is stale too.

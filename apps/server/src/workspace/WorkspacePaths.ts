@@ -175,9 +175,9 @@ const make = Effect.gen(function* () {
         normalizedWorkspaceRoot,
       });
     }
-    return options?.resolveMainCheckout === false
-      ? normalizedWorkspaceRoot
-      : yield* resolveMainCheckout(normalizedWorkspaceRoot);
+    return options?.resolveMainCheckout === true
+      ? yield* resolveMainCheckout(normalizedWorkspaceRoot)
+      : normalizedWorkspaceRoot;
   });
 
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =

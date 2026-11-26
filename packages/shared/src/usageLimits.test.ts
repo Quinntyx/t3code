@@ -26,6 +26,7 @@ import {
   paceOf,
   paceRemainingPercent,
   resolveInstanceHubRoutes,
+  summarizeProviderLimits,
   usageLimitSourceResetAt,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
@@ -2079,23 +2080,28 @@ describe("hub routing and pool resets", () => {
     // Per-driver multi-hub isolation + :fast + t3-discover-*
     expect(
       resolveInstanceHubRoutes(piProvider, [hubA, hubB], "cliproxy/claude-opus-4-6:fast"),
-    ).toEqual({
+    ).toMatchObject({
       driver: claude,
       hubs: [hubA],
       origins: ["http://localhost:8317"],
+      directOnly: false,
     });
     expect(
       resolveInstanceHubRoutes(piProvider, [hubA, hubB], "t3-discover-local/gpt-5.4:fast"),
-    ).toEqual({
+    ).toMatchObject({
       driver: codex,
       hubs: [hubB],
       origins: ["http://localhost:8318"],
+      directOnly: false,
     });
     // Direct non-hub Pi model skips CLIProxyAPI hubs.
-    expect(resolveInstanceHubRoutes(piProvider, [hubA, hubB], "openai-codex/gpt-5.4")).toEqual({
+    expect(
+      resolveInstanceHubRoutes(piProvider, [hubA, hubB], "openai-codex/gpt-5.4"),
+    ).toMatchObject({
       driver: codex,
       hubs: [],
       origins: [],
+      directOnly: true,
     });
     // Because Hub B is routed only for Codex, Hub B's open Claude account does not suppress Hub A's Claude reset.
     expect(
@@ -2117,7 +2123,72 @@ describe("hub routing and pool resets", () => {
       now,
       "anthropic/claude-opus-4-6",
     );
-    expect(directReport?.accounts.some((account) => account.id === "hub-b:codex.json")).toBe(false);
+    expect(directReport).toBeNull();
+    // Unmatched custom auth.endpoint does not leak unrelated configured hubs.
+    const customEndpointProvider = provider({
+      instanceId: ProviderInstanceId.make("claude-custom"),
+      driver: claude,
+      auth: { status: "authenticated", type: "customEndpoint", endpoint: "http://other:9999" },
+      usageLimits: undefined,
+    });
+    expect(
+      collectProviderUsageLimits(
+        customEndpointProvider.instanceId,
+        [customEndpointProvider],
+        [hubA, hubB],
+        now,
+        "claude-opus-4-6",
+      ),
+    ).toBeNull();
+    // Pi with local OpenCode Go usageLimits + ChatGPT usageSources + CLIProxyAPI hub isolates each family.
+    const opencode = ProviderDriverKind.make("opencode");
+    const piMultiSource: ServerProvider = {
+      ...piProvider,
+      usageLimits: {
+        checkedAt,
+        ownerDriver: opencode,
+        windows: [{ id: "go_five_hour", kind: "session", label: "5h", usedPercent: 15 }],
+      },
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: codex,
+          limits: {
+            checkedAt,
+            windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 30 }],
+          },
+        },
+      ],
+    };
+    expect(
+      collectProviderUsageLimits(
+        piMultiSource.instanceId,
+        [piMultiSource],
+        [hubA, hubB],
+        now,
+        "cliproxy/claude-opus-4-6",
+      )?.accounts.map((account) => account.id),
+    ).toEqual(["hub-a:claude.json"]);
+    expect(
+      collectProviderUsageLimits(
+        piMultiSource.instanceId,
+        [piMultiSource],
+        [hubA, hubB],
+        now,
+        "openai-codex/gpt-5.4",
+      )?.accounts.map((account) => account.id),
+    ).toEqual(["pi:chatgpt"]);
+    // summarizeProviderLimits hides origin-scoped hubs from direct providers and reports hub exhaustion.
+    const directClaude = provider({
+      instanceId: ProviderInstanceId.make("claude-direct"),
+      driver: claude,
+      usageLimits: undefined,
+    });
+    expect(summarizeProviderLimits(directClaude, [directClaude], [hubA], now)).toBeNull();
+    const routedSummary = summarizeProviderLimits(piProvider, [piProvider], [hubA], now);
+    expect(routedSummary?.exhausted).toBe(true);
+    expect(routedSummary?.sources.map((source) => source.id)).toEqual(["hub-a:claudeAgent"]);
   });
 
   it("routes vendor-namespaced v8 slugs and ignores expired windows in hubPoolResetAt", () => {

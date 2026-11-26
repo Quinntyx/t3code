@@ -1,9 +1,12 @@
 import {
   CommandId,
+  isOrchestrationV2WorkActive,
   MessageId,
   goalReviewPrompt,
   goalTurnPrompt,
+  type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
+  type OrchestrationV2ProviderThread,
   type OrchestrationV2RunStatus,
   type OrchestrationV2TurnItem,
   type ThreadId,
@@ -25,14 +28,42 @@ const LIVE_RUN_STATUSES: ReadonlySet<OrchestrationV2RunStatus> = new Set([
   "waiting",
 ]);
 
-/** Reading the overload failure and the waiting cards is all the gates need. */
+/** Reading the overload failure, waiting cards, and active async work is all the gates need. */
 const GOAL_TURN_ITEM_TYPES = [
   "error",
   "secret_request",
   "email_request",
   "link_request",
   "feedback_request",
+  "subagent",
+  "command_execution",
+  "dynamic_tool",
 ] as const;
+
+function hasPendingAsyncWork(records: {
+  readonly thread: Pick<OrchestrationV2AppThread, "threadWatches" | "awaitedScheduledTaskIds">;
+  readonly providerThreads: ReadonlyArray<
+    Pick<OrchestrationV2ProviderThread, "pendingBackgroundTasks">
+  >;
+  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+}): boolean {
+  if ((records.thread.threadWatches?.length ?? 0) > 0) return true;
+  if ((records.thread.awaitedScheduledTaskIds?.length ?? 0) > 0) return true;
+  if (
+    records.providerThreads.some(
+      (providerThread) => (providerThread.pendingBackgroundTasks?.length ?? 0) > 0,
+    )
+  ) {
+    return true;
+  }
+  return records.turnItems.some(
+    (item) =>
+      (item.type === "subagent" ||
+        item.type === "command_execution" ||
+        item.type === "dynamic_tool") &&
+      isOrchestrationV2WorkActive(item.status),
+  );
+}
 
 function latestUserAuthoredMessageTimestamp(
   messages: ReadonlyArray<
@@ -133,7 +164,7 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId) {
       const records = yield* projections.getThreadRecords(
         threadId,
-        ["runs", "runtimeRequests", "turnItems", "messages"],
+        ["runs", "runtimeRequests", "turnItems", "messages", "providerThreads"],
         { turnItemTypes: GOAL_TURN_ITEM_TYPES },
       );
       const goal = records.thread.goal ?? null;
@@ -153,6 +184,7 @@ export const make = Effect.gen(function* () {
         // its retry, and after a Stop the user asked for rest.
         overloadedRun(records.runs, records.turnItems) !== null ||
         records.turnItems.some((item) => isWaitingUserInputCard(item, latestUserMessageAt)) ||
+        hasPendingAsyncWork(records) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
@@ -188,7 +220,7 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId) {
       const records = yield* projections.getThreadRecords(
         threadId,
-        ["runs", "runtimeRequests", "turnItems", "messages"],
+        ["runs", "runtimeRequests", "turnItems", "messages", "providerThreads"],
         { turnItemTypes: GOAL_TURN_ITEM_TYPES },
       );
       const goal = records.thread.goal ?? null;
@@ -206,6 +238,7 @@ export const make = Effect.gen(function* () {
         // its retry, and after a Stop the user asked for rest.
         overloadedRun(records.runs, records.turnItems) !== null ||
         records.turnItems.some((item) => isWaitingUserInputCard(item, latestUserMessageAt)) ||
+        hasPendingAsyncWork(records) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;

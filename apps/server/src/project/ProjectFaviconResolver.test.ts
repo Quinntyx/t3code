@@ -65,6 +65,20 @@ it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    it.effect("keeps multi-repo roots with a main/ repository at the container root", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+        yield* fileSystem.makeDirectory(path.join(cwd, "main", ".git"), { recursive: true });
+        yield* writeTextFile(cwd, "favicon.svg", "<svg>root</svg>");
+        yield* writeTextFile(cwd, "main/favicon.svg", "<svg>main</svg>");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "favicon.svg"));
+      }),
+    );
+
     it.effect("falls back at once when a cached favicon is deleted", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;

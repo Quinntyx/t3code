@@ -23,7 +23,7 @@ import {
 import { CHATGPT_USAGE_URL } from "@t3tools/shared/usageLimits";
 import { T, useGT, Var } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
-import { Linking, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import * as Dialog from "../../../components/ui/Dialog";
@@ -35,6 +35,7 @@ import { ListRowLayout } from "../../../components/ui/ListRowLayout";
 import { Menu } from "../../../components/ui/Menu";
 import { Progress } from "../../../components/ui/Progress";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
+import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { uuidv4 } from "../../../lib/uuid";
 import { appAtomRegistry } from "../../../state/atom-registry";
 import { useEnvironmentQuery } from "../../../state/query";
@@ -213,8 +214,11 @@ function ManagedCodexSetup({
     return false;
   };
 
-  const openPage = (page: string) =>
-    Linking.openURL(page).catch(() => setError(gt("Could not open the ChatGPT sign-in page.")));
+  const openPage = (page: string) => {
+    void tryOpenExternalUrl(page, "provider-auth").then((opened) => {
+      if (!opened) setError(gt("Could not open the ChatGPT sign-in page."));
+    });
+  };
 
   const signIn = async (methodId: string, signal: AbortSignal) => {
     if (pendingRef.current) return;
@@ -513,9 +517,9 @@ function ManagedCodexSetup({
               icon="chart.bar.xaxis"
               label={gt("Manage usage")}
               onPress={() =>
-                void Linking.openURL(CHATGPT_USAGE_URL).catch(() =>
-                  setError(gt("Could not open ChatGPT usage settings.")),
-                )
+                void tryOpenExternalUrl(CHATGPT_USAGE_URL).then((opened) => {
+                  if (!opened) setError(gt("Could not open ChatGPT usage settings."));
+                })
               }
             />
           </Divided>

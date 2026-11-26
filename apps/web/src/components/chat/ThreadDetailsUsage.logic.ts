@@ -38,22 +38,31 @@ export function resolveThreadDetailsLimits(
 ): ThreadDetailsLimits | null {
   const provider = providers.find((entry) => entry.instanceId === providerInstanceId);
   if (!provider) return null;
-  const report = collectProviderUsageLimits(provider.instanceId, providers, sources, now, model);
-  // Only this instance's data: the report keeps one instance per login, and any other entry may be
-  // a different login or workspace, so prefer a usable entry for this instance, else its snapshot.
-  const ownEntries =
-    report?.accounts.filter((entry) => entry.instanceId === provider.instanceId) ?? [];
-  const own =
-    ownEntries.find((entry) => limitsNotice(entry.limits) === null)?.limits ??
-    ownEntries[0]?.limits ??
-    provider.usageLimits;
   const { driver: quotaDriver, hubs } = resolveInstanceHubRoutes(provider, sources, model);
-  if (own && limitsNotice(own) === null) return { kind: "instance", limits: own };
   if (hubs.length > 0) {
-    // An instance sent to a hub reads no limits of its own; its hub pools the accounts it spends.
+    // An instance routed to a hub spends that hub's pool for the selected model.
     const pool = hubPool(quotaDriver, model, providers, hubs, now);
     if (pool) return pool;
   }
+  const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
+  if (
+    provider.usageLimits &&
+    limitsNotice(provider.usageLimits) === null &&
+    ownDriver === quotaDriver
+  ) {
+    return { kind: "instance", limits: provider.usageLimits };
+  }
+  const report = collectProviderUsageLimits(provider.instanceId, providers, sources, now, model);
+  // Only this instance's data: the report keeps one instance per login, and any other entry may be
+  // a different login or workspace, so prefer a usable entry matching the selected model's driver.
+  const ownEntries =
+    report?.accounts.filter((entry) => entry.instanceId === provider.instanceId) ?? [];
+  const own =
+    ownEntries.find((entry) => entry.driver === quotaDriver && limitsNotice(entry.limits) === null)
+      ?.limits ??
+    ownEntries.find((entry) => limitsNotice(entry.limits) === null)?.limits ??
+    ownEntries[0]?.limits ??
+    provider.usageLimits;
   return own ? { kind: "instance", limits: own } : null;
 }
 

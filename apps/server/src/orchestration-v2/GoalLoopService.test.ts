@@ -128,6 +128,9 @@ const dispatchedFor = (input: {
     readonly startedAt?: DateTime.Utc;
     readonly updatedAt?: DateTime.Utc;
   }>;
+  readonly providerThreads?: ReadonlyArray<{
+    readonly pendingBackgroundTasks?: ReadonlyArray<unknown>;
+  }>;
   readonly subagents?: ReadonlyArray<OrchestrationV2Subagent>;
   readonly review?: ReturnType<typeof overloadedRunFact>;
 }) =>
@@ -152,6 +155,7 @@ const dispatchedFor = (input: {
                   messages: [],
                   runtimeRequests: [],
                   turnItems: input.review?.turnItems ?? [],
+                  providerThreads: [],
                   subagents: [],
                 }
               : {
@@ -160,6 +164,7 @@ const dispatchedFor = (input: {
                   messages: input.messages ?? [],
                   runtimeRequests: input.runtimeRequests ?? [],
                   turnItems: input.turnItems ?? [],
+                  providerThreads: input.providerThreads ?? [],
                   subagents: input.subagents ?? [],
                 },
           ),
@@ -376,6 +381,25 @@ it.effect.each(
       ["an earlier live run", { runs: [run("run-0", "running"), run("run-1", "completed")] }],
       ["a live run", { runs: [run("run-1", "completed"), run("run-2", "running")] }],
       ["a queued run", { runs: [run("run-1", "completed"), run("run-2", "queued")] }],
+      [
+        "a thread watch",
+        {
+          thread: appThread({
+            threadWatches: [
+              {
+                threadId: ThreadId.make("thread-watched"),
+                runId: RunId.make("run-watched"),
+                startedAt: "2026-11-23T00:00:00.000Z",
+              },
+            ],
+          }),
+        },
+      ],
+      ["an active async subagent", { turnItems: [{ type: "subagent", status: "running" }] }],
+      [
+        "pending provider background tasks",
+        { providerThreads: [{ pendingBackgroundTasks: [{ id: "bg-1" }] }] },
+      ],
       ["no runs", { runs: [] }],
     ] as const
   ).map(([label, input]) => ({ label, input })),

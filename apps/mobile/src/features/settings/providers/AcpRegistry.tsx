@@ -30,7 +30,7 @@ import {
 } from "@t3tools/contracts";
 import { T, useGT } from "gt-react-native";
 import { useLayoutEffect, useRef, useState } from "react";
-import { Linking, View, type TextInputInstance } from "react-native";
+import { View, type TextInputInstance } from "react-native";
 
 import { ProviderIcon } from "../../../components/ProviderIcon";
 import * as Dialog from "../../../components/ui/Dialog";
@@ -41,6 +41,7 @@ import { ListActionRow } from "../../../components/ui/ListActionRow";
 import { Menu } from "../../../components/ui/Menu";
 import { SearchField } from "../../../components/ui/SearchField";
 import { m } from "../../../i18n/messages";
+import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { useProjects } from "../../../state/entities";
 import { useDebouncedValue } from "../../../state/queries";
 import { useEnvironmentQuery } from "../../../state/query";
@@ -218,7 +219,11 @@ function AcpRegistryAgentRow(props: {
         <ControlPill
           icon="arrow.up.right"
           accessibilityLabel={gt("About {name}", { name: agent.name })}
-          onPress={() => void Linking.openURL(aboutUrl).catch(() => undefined)}
+          onPress={() => {
+            void tryOpenExternalUrl(aboutUrl).then((opened) => {
+              if (!opened) Dialog.alert(gt("Could not open the page"), aboutUrl);
+            });
+          }}
         />
       ) : null}
       {props.preparing ? (

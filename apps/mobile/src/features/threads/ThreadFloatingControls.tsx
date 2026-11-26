@@ -10,8 +10,8 @@ import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadDetailsDrawer, useThreadListDrawer } from "./thread-list-drawer";
 
-export const THREAD_FLOATING_CONTROL_TOP_GAP = 8;
-export const THREAD_FLOATING_CONTROL_SIZE = 44;
+const THREAD_FLOATING_CONTROL_TOP_GAP = 8;
+const THREAD_FLOATING_CONTROL_SIZE = 44;
 /** Distance from the top safe-area inset to the bottom of the floating row. */
 export const THREAD_FLOATING_CONTROL_ROW_OFFSET =
   THREAD_FLOATING_CONTROL_TOP_GAP + THREAD_FLOATING_CONTROL_SIZE;

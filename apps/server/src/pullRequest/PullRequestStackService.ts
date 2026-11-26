@@ -25,6 +25,8 @@ import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import { busyThreadsInCheckout } from "../git/sharedCheckoutGuard.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -240,6 +242,9 @@ export const make = Effect.gen(function* () {
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const gitWorkflow = Option.getOrUndefined(
+    yield* Effect.serviceOption(GitWorkflowService.GitWorkflowService),
+  );
   const random = yield* SecureRandom.SecureRandom;
   const reports = new Map<string, Deferred.Deferred<StackMergeReport>>();
 
@@ -254,7 +259,13 @@ export const make = Effect.gen(function* () {
     projectStore
       .getShell(projectId)
       .pipe(
-        Effect.map(Option.map((project) => project.workspaceRoot)),
+        Effect.map(
+          Option.flatMap((project) =>
+            (project.trackedFolders?.length ?? 0) > 0
+              ? Option.none()
+              : Option.some(project.workspaceRoot),
+          ),
+        ),
         Effect.map(Option.getOrNull),
       );
 
@@ -330,17 +341,38 @@ export const make = Effect.gen(function* () {
             }),
           ).pipe(Effect.as({ result: result("agent-asked", { reason }), headSha: null }));
 
+    const repoRoot = gitWorkflow
+      ? yield* gitWorkflow.repositoryRoot(cwd).pipe(Effect.orElseSucceed(() => null))
+      : null;
+    const checkoutPaths = [...new Set([cwd, ...(repoRoot === null ? [] : [repoRoot])])];
+    const checkoutSnapshots = yield* Effect.forEach(
+      [
+        projections.getShellSnapshot({ projectId: thread.projectId }),
+        ...checkoutPaths.map((worktreePath) => projections.getShellSnapshot({ worktreePath })),
+      ],
+      (snapshot) =>
+        snapshot.pipe(Effect.orElseSucceed(() => ({ threads: [], archivedThreads: [] }))),
+      { concurrency: "unbounded" },
+    );
+    const otherThreads = checkoutSnapshots
+      .flatMap((snapshot) => [...snapshot.threads, ...snapshot.archivedThreads])
+      .filter((candidate) => candidate.deletedAt === null && candidate.id !== thread.id);
+    const sameCheckoutProjectIds = new Set(
+      checkoutPaths.includes(plan.root) ? [thread.projectId] : [],
+    );
     const sharedCheckoutBusy =
-      thread.worktreePath !== null
-        ? false
-        : (yield* projectThreads(thread.projectId).pipe(Effect.orElseSucceed(() => []))).some(
-            (candidate) =>
-              candidate.id !== thread.id &&
-              (candidate.worktreePath === null || candidate.worktreePath === cwd) &&
-              (candidate.activeRunId !== null ||
-                (candidate.activityRunStatus ?? null) !== null ||
-                candidate.pendingRuntimeRequest !== null),
-          );
+      busyThreadsInCheckout({
+        checkoutPaths,
+        projectIds: sameCheckoutProjectIds,
+        threads: otherThreads,
+      }).length > 0 ||
+      otherThreads.some(
+        (candidate) =>
+          (candidate.worktreePath === null
+            ? sameCheckoutProjectIds.has(candidate.projectId)
+            : checkoutPaths.includes(candidate.worktreePath)) &&
+          (candidate.activeRunId !== null || candidate.pendingRuntimeRequest !== null),
+      );
     const status = yield* git.statusDetailsLocal(cwd);
     const blocker = restackBlocker({
       thread,
@@ -659,13 +691,33 @@ export const make = Effect.gen(function* () {
                 .slice(0, targetIndex + 1)
                 .filter((layer) => layer.state !== "merged")
                 .map((layer) => layer.number);
+        if (
+          input.requireMultiLayer === true &&
+          (nativeStack.layers.length <= 1 || mergedLayers.length <= 1)
+        ) {
+          return yield* stop(
+            `PR #${target.number} is not in a stack this host can merge. Merge it without stack.`,
+          );
+        }
+        const resolvedExpectedHeadSha =
+          input.expectedHeadSha === undefined
+            ? undefined
+            : target.headSha !== undefined &&
+                PullRequestService.isHeadSha(target.headSha, input.expectedHeadSha)
+              ? target.headSha
+              : null;
+        if (resolvedExpectedHeadSha === null) {
+          return yield* stop(
+            `PR #${target.number} moved since it was read (expected ${input.expectedHeadSha}, found ${target.headSha ?? "unknown"}).`,
+          );
+        }
         yield* pullRequests.runAction({
           ...ref,
           number: target.number,
           action: "merge",
-          ...(input.expectedHeadSha === undefined
+          ...(resolvedExpectedHeadSha === undefined
             ? {}
-            : { expectedHeadSha: input.expectedHeadSha }),
+            : { expectedHeadSha: resolvedExpectedHeadSha }),
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
         });
         return { merged: mergedLayers.length > 0 ? mergedLayers : [target.number] };

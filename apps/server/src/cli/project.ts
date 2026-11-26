@@ -267,7 +267,7 @@ const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(function* (
   }
 
   const exactWorkspaceRootResult = yield* Effect.result(
-    normalizeWorkspaceRootForProjectCommand(trimmedIdentifier, { resolveMainCheckout: false }),
+    normalizeWorkspaceRootForProjectCommand(trimmedIdentifier),
   );
   const exactWorkspaceRoot =
     exactWorkspaceRootResult._tag === "Success"
@@ -285,7 +285,7 @@ const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(function* (
   }
 
   const normalizedWorkspaceRootResult = yield* Effect.result(
-    normalizeWorkspaceRootForProjectCommand(trimmedIdentifier),
+    normalizeWorkspaceRootForProjectCommand(trimmedIdentifier, { resolveMainCheckout: true }),
   );
   // A stored workspace path still identifies its project after the directory is gone, so a
   // relative or trailing-slash path resolves the same way it would while the directory exists.

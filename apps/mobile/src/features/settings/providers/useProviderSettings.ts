@@ -42,7 +42,7 @@ import { useAtomCommand } from "../../../state/use-atom-command";
 const NO_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const NO_SECRET_SOURCES: ReadonlyArray<SecretRequestSource> = [];
 
-export function failureMessage(
+function failureMessage(
   result: { readonly cause: Parameters<typeof squashAtomCommandFailure>[0]["cause"] },
   fallback: string,
 ) {
@@ -112,7 +112,7 @@ export function useEnvironmentProviders(environmentId: EnvironmentId) {
 }
 
 /** The policy an environment's administrator applies, or undefined when it is unmanaged. */
-export function useManagedPolicy(environmentId: EnvironmentId): ManagedPolicySummary | undefined {
+function useManagedPolicy(environmentId: EnvironmentId): ManagedPolicySummary | undefined {
   return useAtomValue(serverEnvironment.configValueAtom(environmentId))?.managedPolicy;
 }
 
@@ -125,7 +125,7 @@ export function useSecretSources(environmentId: EnvironmentId): ReadonlyArray<Se
   return configuredSecretSources(config.settings.secretProviders);
 }
 
-export function useEnvironmentServerSettings(environmentId: EnvironmentId) {
+function useEnvironmentServerSettings(environmentId: EnvironmentId) {
   return (
     useAtomValue(serverEnvironment.settingsValueAtom(environmentId)) ?? DEFAULT_SERVER_SETTINGS
   );

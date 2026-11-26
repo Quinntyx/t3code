@@ -56,6 +56,36 @@ function failedThread(
 }
 
 describe("UsageLimitRecoveryCard", () => {
+  // The sweep writes the cap; there is no failed run to recover.
+  it("shows a consumption cap on a thread that never failed", () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+    act(() =>
+      root.render(
+        <UsageLimitRecoveryCard
+          thread={
+            {
+              id: "thread-1",
+              updatedAt: new Date(0).toISOString(),
+              snoozedUntil: null,
+              latestRun: null,
+              limitRecovery: null,
+              runtime: { status: "idle" },
+              consumptionCapHit: {
+                at: new Date(0).toISOString(),
+                reason: "API spend reached $1.00.",
+              },
+            } as unknown as EnvironmentThreadShell
+          }
+          environmentId={"env-1" as EnvironmentId}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("Consumption cap reached.");
+    expect(container.textContent).toContain("API spend reached $1.00.");
+  });
+
   // Older servers report ChatGPT sharing limits as provider errors and may store a reset.
   it.each([
     [CHATGPT_USAGE_LIMIT_CODE, "usage_limit", null, ["Manage usage"]],

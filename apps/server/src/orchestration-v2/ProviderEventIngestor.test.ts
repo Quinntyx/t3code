@@ -342,9 +342,9 @@ it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the sn
     }).pipe(
       Effect.provide(makeLayerTest(layerTestEventSink, instances)),
       Effect.provideService(UsageLimitResetFallback, {
-        resetAt: (driver, endpoint, model) =>
+        resetAt: (provider, model) =>
           Effect.sync(() => {
-            hubLookups.push([driver, endpoint, model]);
+            hubLookups.push([String(provider.driver), provider.auth.endpoint ?? "", model]);
             return "2026-11-13T18:00:00.000Z";
           }),
       }),

@@ -8,6 +8,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type ModelSelection,
+  type ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -29,11 +30,7 @@ import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
-import {
-  resolveInstanceHubRoutes,
-  usageLimitResetAt,
-  usageLimitSourceResetAt,
-} from "@t3tools/shared/usageLimits";
+import { usageLimitResetAt } from "@t3tools/shared/usageLimits";
 import {
   ProviderTurnAnalytics,
   type ProviderTurnAnalyticsContext,
@@ -271,22 +268,18 @@ export const layer: Layer.Layer<
     const scope = yield* Effect.scope;
     const completedTurnAnalytics = new Set<string>();
 
-    const fallbackUsageLimitResetAt = Effect.fnUntraced(function* (
+    const fallbackUsageLimitResetAt = (
       snapshot: ServerProvider | undefined,
+      driver: ProviderDriverKind,
       occurredAt: DateTime.Utc,
-      model: string | undefined,
-    ) {
+      model: string | null,
+    ): Effect.Effect<string | null> => {
+      if (!snapshot) return Effect.succeed(null);
       const now = DateTime.toEpochMillis(occurredAt);
-      return (
-        usageLimitResetAt(snapshot, now, model) ??
-        usageLimitSourceResetAt(
-          usageSources ? yield* usageSources.current : [],
-          snapshot,
-          now,
-          model,
-        )
-      );
-    });
+      const localReset = usageLimitResetAt(snapshot, now, model);
+      if (localReset !== null) return Effect.succeed(localReset);
+      return usageLimitResets.resetAt({ ...snapshot, driver: snapshot.driver ?? driver }, model);
+    };
 
     const makeDomainEvent =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -299,7 +292,7 @@ export const layer: Layer.Layer<
           readonly runId?: RunId | null;
           readonly nodeId?: NodeId | null;
           readonly occurredAt?: DateTime.Utc;
-          readonly skipUsageLimitResetFallback?: boolean;
+          readonly usageLimitFallbackModel?: string | null;
         },
       ) {
         const threadId = payloadInput.threadId ?? input.threadId;
@@ -310,7 +303,6 @@ export const layer: Layer.Layer<
         const occurredAt = payloadInput.occurredAt ?? (yield* DateTime.now);
         let payload = payloadInput.payload;
         if (
-          payloadInput.skipUsageLimitResetFallback !== true &&
           payloadInput.type === "turn-item.updated" &&
           "type" in payload &&
           payload.type === "error" &&
@@ -319,8 +311,16 @@ export const layer: Layer.Layer<
         ) {
           const instance = yield* instances.getInstance(input.providerInstanceId);
           const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
-          const model = input.analyticsContext?.modelSelection.model;
-          const resetAt = yield* fallbackUsageLimitResetAt(snapshot, occurredAt, model);
+          const model =
+            payloadInput.usageLimitFallbackModel ??
+            input.analyticsContext?.modelSelection.model ??
+            null;
+          const resetAt = yield* fallbackUsageLimitResetAt(
+            snapshot,
+            input.event.driver,
+            occurredAt,
+            model,
+          );
           if (resetAt !== null) payload = { ...payload, failure: { ...payload.failure, resetAt } };
         }
         return yield* decodeDomainEvent(
@@ -748,12 +748,6 @@ export const layer: Layer.Layer<
               // A proxied CLI can drop the reset time; the hub still knows when its pool refills.
               const needsUsageLimitReset =
                 reported.class === "usage_limit" && reported.resetAt == null;
-              const snapshot = needsUsageLimitReset
-                ? yield* Effect.flatMap(
-                    instances.getInstance(input.providerInstanceId),
-                    (instance) => instance?.snapshot.getSnapshot ?? Effect.undefined,
-                  )
-                : undefined;
               const failingModel = needsUsageLimitReset
                 ? yield* Effect.gen(function* () {
                     // The failing run's model, which may differ from a selection changed mid-turn.
@@ -773,39 +767,12 @@ export const layer: Layer.Layer<
                     ),
                   )
                 : null;
-              const hubRoutesForFailure = snapshot
-                ? resolveInstanceHubRoutes(
-                    { ...snapshot, driver: snapshot.driver ?? input.event.driver },
-                    [],
-                    failingModel,
-                  )
-                : null;
-              const endpoint =
-                hubRoutesForFailure && hubRoutesForFailure.origins.length > 0
-                  ? (snapshot?.auth.endpoint ?? hubRoutesForFailure.origins[0])
-                  : undefined;
-              const hubResetAt =
-                endpoint === undefined || hubRoutesForFailure === null
-                  ? null
-                  : yield* usageLimitResets.resetAt(
-                      hubRoutesForFailure.driver,
-                      endpoint,
-                      failingModel,
-                    );
-              const resetAt = needsUsageLimitReset
-                ? (hubResetAt ??
-                  (yield* fallbackUsageLimitResetAt(
-                    snapshot,
-                    occurredAt,
-                    failingModel ?? input.analyticsContext?.modelSelection.model ?? undefined,
-                  )))
-                : null;
-              const failure = resetAt === null ? reported : { ...reported, resetAt };
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {
                   type: "turn-item.updated",
-                  skipUsageLimitResetFallback: needsUsageLimitReset,
+                  occurredAt,
+                  ...(failingModel === null ? {} : { usageLimitFallbackModel: failingModel }),
                   payload: makeProviderFailureTurnItem({
                     driver: input.event.driver,
                     threadId: input.threadId,
@@ -814,7 +781,7 @@ export const layer: Layer.Layer<
                     providerThreadId: input.event.providerThreadId,
                     providerTurnId: input.event.providerTurnId,
                     itemOrdinal: input.event.failureItemOrdinal,
-                    failure,
+                    failure: reported,
                     ...(input.event.retry === undefined ? {} : { retry: input.event.retry }),
                     ...(input.event.retryStartedAt === undefined
                       ? {}

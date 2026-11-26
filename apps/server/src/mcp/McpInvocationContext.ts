@@ -213,15 +213,6 @@ export const hiddenFromOutsideClients = (): boolean => {
   return scope === undefined || scope.thread !== undefined;
 };
 
-/** `hiddenFromOutsideClients`, and hidden from a thread whose provider cannot hold for background work. */
-export const hiddenWithoutBackgroundWait = (): boolean => {
-  const fiber = Fiber.getCurrent();
-  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
-  return (
-    scope === undefined || (scope.thread !== undefined && scope.capabilities.has("background-wait"))
-  );
-};
-
 /** `McpSchema.EnabledWhen` for tools only a client outside a thread drives, such as the CLI. */
 export const hiddenFromThreads = (): boolean => {
   const fiber = Fiber.getCurrent();

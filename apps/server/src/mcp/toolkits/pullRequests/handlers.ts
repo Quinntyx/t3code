@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 
 import * as GitManager from "../../../git/GitManager.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as PullRequestSyncReactor from "../../../orchestration-v2/PullRequestSyncReactor.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import { resolveTarget, type ResolvedTarget } from "../../../pullRequest/pullRequestTarget.ts";
@@ -269,6 +270,9 @@ const make = Effect.gen(function* () {
   const watches = yield* PullRequestWatchService.PullRequestWatchService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const pullRequestStacks = yield* PullRequestStackService.PullRequestStackService;
+  const pullRequestSync = Option.getOrUndefined(
+    yield* Effect.serviceOption(PullRequestSyncReactor.PullRequestSyncReactor),
+  );
   const git = yield* GitManager.GitManager;
 
   const projects = yield* ProjectService.ProjectService;
@@ -1170,7 +1174,15 @@ const make = Effect.gen(function* () {
             requireMultiLayer: true,
             ...(input.method === undefined ? {} : { mergeMethod: input.method }),
           };
-          yield* pullRequestStacks.mergeStack(stackMergeInput).pipe(Effect.mapError(forgeFailure));
+          const { merged } = yield* pullRequestStacks
+            .mergeStack(stackMergeInput)
+            .pipe(Effect.mapError(forgeFailure));
+          if (pullRequestSync !== undefined) {
+            for (const number of new Set([...merged, ref.number])) {
+              const syncKey = pullRequestSyncKey({ ...ref, number });
+              if (syncKey !== null) yield* pullRequestSync.requestSync(syncKey);
+            }
+          }
         } else {
           yield* pullRequests
             .runAction({

@@ -36,7 +36,7 @@ import {
 } from "@t3tools/contracts";
 import { T, useGT, useMessages, Var } from "gt-react-native";
 import { useState } from "react";
-import { Linking, Platform, View } from "react-native";
+import { Platform, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -45,9 +45,11 @@ import { AppText as Text, AppTextInput } from "../../../components/ui/AppText";
 import { SymbolView } from "../../../components/ui/AppSymbol";
 import { Button } from "../../../components/ui/Button";
 import { ControlPill } from "../../../components/ui/ControlPill";
+import * as Dialog from "../../../components/ui/Dialog";
 import { ListRow } from "../../../components/ui/ListRow";
 import { RowPressable } from "../../../components/ui/RowPressable";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
+import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { readEnvironmentScope, useEnvironmentScope } from "../../../state/session";
 import { SettingsScreen } from "../components/SettingsScreen";
 import { SettingsSection } from "../components/SettingsSection";
@@ -473,14 +475,27 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
                         <ControlPill
                           variant="pill"
                           label={gt("Docs")}
-                          onPress={() => void Linking.openURL(selectedAcp.website!)}
+                          onPress={() => {
+                            void tryOpenExternalUrl(selectedAcp.website!).then((opened) => {
+                              if (!opened)
+                                Dialog.alert(gt("Could not open the page"), selectedAcp.website!);
+                            });
+                          }}
                         />
                       ) : null}
                       {selectedAcp.repository ? (
                         <ControlPill
                           variant="pill"
                           label={gt("Source", { $context: "source code repository" })}
-                          onPress={() => void Linking.openURL(selectedAcp.repository!)}
+                          onPress={() => {
+                            void tryOpenExternalUrl(selectedAcp.repository!).then((opened) => {
+                              if (!opened)
+                                Dialog.alert(
+                                  gt("Could not open the page"),
+                                  selectedAcp.repository!,
+                                );
+                            });
+                          }}
                         />
                       ) : null}
                     </View>
@@ -545,7 +560,12 @@ function AddProvider({ environmentId }: { readonly environmentId: EnvironmentId 
               <ControlPill
                 variant="pill"
                 label={gt("Why not several accounts?")}
-                onPress={() => void Linking.openURL(MULTIPLE_ACCOUNTS_FAQ_URL)}
+                onPress={() => {
+                  void tryOpenExternalUrl(MULTIPLE_ACCOUNTS_FAQ_URL).then((opened) => {
+                    if (!opened)
+                      Dialog.alert(gt("Could not open the page"), MULTIPLE_ACCOUNTS_FAQ_URL);
+                  });
+                }}
               />
             ) : null}
           </>

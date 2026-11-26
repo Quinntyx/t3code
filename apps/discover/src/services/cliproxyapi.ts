@@ -39,7 +39,7 @@ export interface CliProxyServiceConfig {
 }
 
 /** Client-facing base URL for one endpoint, using the protocol's default path. */
-export const cliProxyBaseUrl = (endpoint: DiscoverServiceEndpoint, basePath: string): string => {
+const cliProxyBaseUrl = (endpoint: DiscoverServiceEndpoint, basePath: string): string => {
   const origin = new URL(endpoint.httpBaseUrl).origin;
   return basePath.length === 0 ? origin : `${origin}${basePath}`;
 };

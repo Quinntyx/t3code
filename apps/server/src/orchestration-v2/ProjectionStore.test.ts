@@ -12735,11 +12735,75 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         });
 
         yield* assertShellIndexCoversShells();
-        const index = yield* store.listActiveShellIndex();
+        const { statements: indexStatements, tracer: indexTracer } = traceSqlStatements();
+        const index = yield* store.listActiveShellIndex().pipe(Effect.withTracer(indexTracer));
         const byId = new Map(index.map((entry) => [entry.id, entry.mayBeLive] as const));
         assert.isTrue(byId.get(watchedId), "threadWatches must set mayBeLive");
         assert.isTrue(byId.get(awaitedId), "awaitedScheduledTaskIds must set mayBeLive");
         assert.isTrue(byId.get(stalledId), "stalled subagent must set mayBeLive");
+
+        const { statements: stallStatements, tracer: stallTracer } = traceSqlStatements();
+        yield* store.getStallRecoveryCandidates().pipe(Effect.withTracer(stallTracer));
+        const sql = yield* SqlClient.SqlClient;
+        for (const statement of [...indexStatements, ...stallStatements]) {
+          const plan = (yield* sql.unsafe<{ readonly detail: string }>(
+            `EXPLAIN QUERY PLAN ${statement}`,
+          )).map((row) => row.detail);
+          assert.isTrue(
+            plan.some((detail) =>
+              detail.includes("orchestration_v2_projection_turn_items_overloaded_idx"),
+            ),
+            `Expected overloaded partial index in query plan:\n${plan.join("\n")}`,
+          );
+          for (const detail of plan) {
+            assert.notMatch(detail, /^SCAN orchestration_v2_projection_turn_items\b/);
+          }
+        }
+
+        // A subsequent completed run clears stalled liveness so mayBeLive returns to false.
+        const recoveredRunId = RunId.make("run:may-be-live:stalled:recovered");
+        const recoveredAt = DateTime.add(now, { seconds: 5 });
+        yield* store.apply({
+          id: EventId.make("event:may-be-live:stalled:recovered-run"),
+          type: "run.created",
+          threadId: stalledId,
+          runId: recoveredRunId,
+          driver,
+          providerInstanceId,
+          occurredAt: recoveredAt,
+          payload: {
+            id: recoveredRunId,
+            threadId: stalledId,
+            ordinal: 2,
+            providerInstanceId,
+            modelSelection,
+            providerThreadId: null,
+            userMessageId: MessageId.make("message:may-be-live:stalled:recovered"),
+            rootNodeId: NodeId.make("node:may-be-live:stalled:recovered"),
+            activeAttemptId: null,
+            status: "completed",
+            requestedAt: recoveredAt,
+            startedAt: recoveredAt,
+            completedAt: recoveredAt,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        });
+        const afterRecovery = yield* store.listActiveShellIndex();
+        const recoveredEntry = afterRecovery.find((entry) => entry.id === stalledId);
+        assert.isFalse(recoveredEntry?.mayBeLive, "completed follow-up run must clear mayBeLive");
+
+        // Clean up test threads so shared-SQLite sibling tests see an isolated stall/shell state.
+        for (const cleanupId of [watchedId, awaitedId, stalledId]) {
+          const existing = (yield* store.getThreadProjection(cleanupId)).thread;
+          yield* store.apply({
+            id: EventId.make(`event:may-be-live:cleanup:${cleanupId}`),
+            type: "thread.deleted",
+            threadId: cleanupId,
+            occurredAt: recoveredAt,
+            payload: { ...existing, deletedAt: recoveredAt, updatedAt: recoveredAt },
+          });
+        }
       }),
   );
 
@@ -12892,6 +12956,70 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           activeRunId: null,
           hasActiveDelegates: true,
           hasActiveBackgroundWork: true,
+        },
+      ]);
+
+      // Waiting runs and waiting delegates still count as active; rolled-back runs' items do not.
+      const rolledBackAt = DateTime.add(now, { seconds: 1 });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:run-rolled-back"),
+        type: "run.updated",
+        threadId,
+        runId,
+        driver,
+        providerInstanceId,
+        occurredAt: rolledBackAt,
+        payload: {
+          ...(yield* store.getThreadProjection(threadId)).runs[0]!,
+          status: "rolled_back",
+        },
+      });
+      const waitingRunId = RunId.make("run:consumption-cap-candidates:waiting");
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:waiting-run"),
+        type: "run.created",
+        threadId,
+        runId: waitingRunId,
+        driver,
+        providerInstanceId,
+        occurredAt: rolledBackAt,
+        payload: {
+          id: waitingRunId,
+          threadId,
+          ordinal: 2,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:consumption-cap-candidates:waiting"),
+          rootNodeId: NodeId.make("node:consumption-cap-candidates:waiting"),
+          activeAttemptId: null,
+          status: "waiting",
+          requestedAt: rolledBackAt,
+          startedAt: rolledBackAt,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:child-run-waiting"),
+        type: "run.updated",
+        threadId: childThreadId,
+        runId: childRunId,
+        driver,
+        providerInstanceId,
+        occurredAt: rolledBackAt,
+        payload: {
+          ...(yield* store.getThreadProjection(childThreadId)).runs[0]!,
+          status: "waiting",
+        },
+      });
+      assert.deepEqual(yield* store.getConsumptionCapCandidates(), [
+        {
+          thread: (yield* store.getThreadProjection(threadId)).thread,
+          activeRunId: waitingRunId,
+          hasActiveDelegates: true,
+          hasActiveBackgroundWork: false,
         },
       ]);
     }),

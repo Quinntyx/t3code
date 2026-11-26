@@ -91,6 +91,7 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   ProviderInteractionMode,
+  RunId,
   resolveEnvironmentMachineKind,
   resolveIdleCompaction,
   RuntimeMode,
@@ -2809,17 +2810,20 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
+  // A cap hit is written by a sweep, so it lands without a failed run to recover.
+  const consumptionCapHit = activeThreadShell?.consumptionCapHit ?? null;
   const limitRecoveryBanner = useUsageLimitRecoveryBannerItem(
-    limitRecoveryRun !== null && activeThreadShell !== null
+    (limitRecoveryRun !== null || consumptionCapHit !== null) && activeThreadShell !== null
       ? {
-          runId: limitRecoveryRun.runId,
+          runId:
+            limitRecoveryRun?.runId ?? consumptionCapHit?.runId ?? RunId.make(activeThreadShell.id),
           errorCode: serverRuntime?.lastErrorCode ?? null,
           resetAt: serverRuntime?.usageLimitResetAt ?? null,
-          stoppedAt: limitRecoveryRun.completedAt ?? activeThreadShell.updatedAt,
+          stoppedAt: limitRecoveryRun?.completedAt ?? activeThreadShell.updatedAt,
           settled: activeThreadShell.settledOverride === "settled",
           requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
           recovery: activeThreadShell.limitRecovery ?? null,
-          consumptionCapHit: activeThreadShell.consumptionCapHit ?? null,
+          consumptionCapHit,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
           onChange: async (limitRecovery) => {

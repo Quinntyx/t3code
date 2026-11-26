@@ -2977,11 +2977,16 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.pullRequestsMergeStack]: (input) =>
           withPullRequestViewer(input, pullRequestStacks.mergeStack(input)).pipe(
-            Effect.tap(() =>
-              resolvePullRequestSyncKey(input).pipe(
-                Effect.flatMap((key) =>
-                  key === null ? Effect.void : pullRequestSync.requestSync(key),
-                ),
+            Effect.tap(({ merged }) =>
+              Effect.forEach(
+                [...new Set([...merged, input.number])],
+                (number) =>
+                  resolvePullRequestSyncKey({ ...input, number }).pipe(
+                    Effect.flatMap((key) =>
+                      key === null ? Effect.void : pullRequestSync.requestSync(key),
+                    ),
+                  ),
+                { discard: true },
               ),
             ),
           ),

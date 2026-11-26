@@ -14,6 +14,7 @@ import noManualMemo from "./rules/no-manual-memo.ts";
 import noManualEffectRuntimeInTests from "./rules/no-manual-effect-runtime-in-tests.ts";
 import noMobileUniwindThemeEscapeHatches from "./rules/no-mobile-uniwind-theme-escape-hatches.ts";
 import noAmbiguousDetailNavigation from "./rules/no-ambiguous-detail-navigation.ts";
+import noDirectLinkingOpenUrl from "./rules/no-direct-linking-open-url.ts";
 import noMobilePullRequestGlyphLiterals from "./rules/no-mobile-pull-request-glyph-literals.ts";
 import noNativeTitleTooltip from "./rules/no-native-title-tooltip.ts";
 import noSparklesIcon from "./rules/no-sparkles-icon.ts";
@@ -55,6 +56,7 @@ export default definePlugin({
     "no-manual-memo": noManualMemo,
     "no-mobile-uniwind-theme-escape-hatches": noMobileUniwindThemeEscapeHatches,
     "no-ambiguous-detail-navigation": noAmbiguousDetailNavigation,
+    "no-direct-linking-open-url": noDirectLinkingOpenUrl,
     "no-mobile-pull-request-glyph-literals": noMobilePullRequestGlyphLiterals,
     "no-native-title-tooltip": noNativeTitleTooltip,
     "no-sparkles-icon": noSparklesIcon,

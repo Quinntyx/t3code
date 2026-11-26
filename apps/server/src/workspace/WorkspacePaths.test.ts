@@ -39,8 +39,31 @@ it.layer(layerTest)("WorkspacePathsLive", (it) => {
             yield* fs.writeFileString(path.join(main, ".git"), "gitdir: ../.bare/worktrees/main\n");
           }
 
-          expect(yield* workspacePaths.normalizeWorkspaceRoot(container)).toBe(main);
-          expect(yield* workspacePaths.normalizeWorkspaceRoot(main)).toBe(main);
+          expect(
+            yield* workspacePaths.normalizeWorkspaceRoot(container, { resolveMainCheckout: true }),
+          ).toBe(main);
+          expect(
+            yield* workspacePaths.normalizeWorkspaceRoot(main, { resolveMainCheckout: true }),
+          ).toBe(main);
+          // Default leaves the exact folder untouched so multi-repo roots are safe by construction.
+          expect(yield* workspacePaths.normalizeWorkspaceRoot(container)).toBe(container);
+        }),
+    );
+
+    it.effect(
+      "keeps multi-repo containers with sibling git directories at the container root",
+      () =>
+        Effect.gen(function* () {
+          const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const container = yield* makeTempDir();
+          yield* fs.makeDirectory(path.join(container, "main", ".git"), { recursive: true });
+          yield* fs.makeDirectory(path.join(container, "api", ".git"), { recursive: true });
+
+          expect(
+            yield* workspacePaths.normalizeWorkspaceRoot(container, { resolveMainCheckout: true }),
+          ).toBe(container);
         }),
     );
 
@@ -55,8 +78,12 @@ it.layer(layerTest)("WorkspacePathsLive", (it) => {
         const nested = path.join(root, "nested");
         yield* fs.makeDirectory(path.join(nested, "main", ".git"), { recursive: true });
 
-        expect(yield* workspacePaths.normalizeWorkspaceRoot(root)).toBe(root);
-        expect(yield* workspacePaths.normalizeWorkspaceRoot(nested)).toBe(nested);
+        expect(
+          yield* workspacePaths.normalizeWorkspaceRoot(root, { resolveMainCheckout: true }),
+        ).toBe(root);
+        expect(
+          yield* workspacePaths.normalizeWorkspaceRoot(nested, { resolveMainCheckout: true }),
+        ).toBe(nested);
       }),
     );
 
@@ -68,7 +95,9 @@ it.layer(layerTest)("WorkspacePathsLive", (it) => {
         const root = yield* makeTempDir();
         yield* fs.makeDirectory(path.join(root, "main"));
 
-        expect(yield* workspacePaths.normalizeWorkspaceRoot(root)).toBe(root);
+        expect(
+          yield* workspacePaths.normalizeWorkspaceRoot(root, { resolveMainCheckout: true }),
+        ).toBe(root);
       }),
     );
 

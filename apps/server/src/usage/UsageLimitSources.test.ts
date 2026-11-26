@@ -579,10 +579,12 @@ it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold t
     let refresh: Effect.Effect<void> = Effect.sync(() => {
       current = [roomLeft];
     });
+    const claudeAt = (endpoint: string) => ({
+      driver: ProviderDriverKind.make("claudeAgent"),
+      auth: { status: "authenticated" as const, endpoint },
+    });
     const lookup = UsageLimitSources.UsageLimitResetFallback.pipe(
-      Effect.flatMap((fallback) =>
-        fallback.resetAt(ProviderDriverKind.make("claudeAgent"), "http://hub.test", null),
-      ),
+      Effect.flatMap((fallback) => fallback.resetAt(claudeAt("http://hub.test"), null)),
       Effect.provide(
         UsageLimitSources.layerResetFallback.pipe(
           Layer.provide(
@@ -600,9 +602,7 @@ it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold t
     const loopbackHub = { ...roomLeft, origin: "http://127.0.0.1:8317" };
     current = [loopbackHub];
     const loopbackLookup = UsageLimitSources.UsageLimitResetFallback.pipe(
-      Effect.flatMap((fallback) =>
-        fallback.resetAt(ProviderDriverKind.make("claudeAgent"), "http://localhost:8317", null),
-      ),
+      Effect.flatMap((fallback) => fallback.resetAt(claudeAt("http://localhost:8317"), null)),
       Effect.provide(
         UsageLimitSources.layerResetFallback.pipe(
           Layer.provide(
@@ -615,6 +615,30 @@ it.effect("the reset fallback refreshes its hub, and a stalled hub cannot hold t
       ),
     );
     expect(yield* loopbackLookup).toBe(at(2));
+    // A non-hub auth.endpoint with a hub in usageRoutes still matches and refreshes that hub.
+    const multiOriginProvider = {
+      driver: ProviderDriverKind.make("pi"),
+      auth: { status: "authenticated" as const, endpoint: "http://other.local:9999" },
+      usageRoutes: [
+        { driver: ProviderDriverKind.make("claudeAgent"), origin: "http://localhost:8317" },
+      ],
+    };
+    const multiOriginLookup = UsageLimitSources.UsageLimitResetFallback.pipe(
+      Effect.flatMap((fallback) =>
+        fallback.resetAt(multiOriginProvider, "cliproxyapi/claude-opus-4-6"),
+      ),
+      Effect.provide(
+        UsageLimitSources.layerResetFallback.pipe(
+          Layer.provide(
+            Layer.mock(UsageLimitSources.UsageLimitSources)({
+              current: Effect.sync(() => current),
+              refresh: Effect.void,
+            }),
+          ),
+        ),
+      ),
+    );
+    expect(yield* multiOriginLookup).toBe(at(2));
     current = [cached];
     refresh = Effect.never;
     const stalled = yield* Effect.forkChild(lookup);

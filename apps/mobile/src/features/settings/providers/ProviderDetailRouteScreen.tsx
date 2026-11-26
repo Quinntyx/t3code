@@ -31,7 +31,7 @@ import {
 import { createModelHiddenPredicate, readCustomModelEntries } from "@t3tools/shared/model";
 import { msg, T, useGT, useMessages, Var } from "gt-react-native";
 import { useState } from "react";
-import { Linking, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import * as Dialog from "../../../components/ui/Dialog";
@@ -45,6 +45,7 @@ import { ListToggleRow } from "../../../components/ui/ListToggleRow";
 import { ScreenScrollView } from "../../../components/ui/ScreenScrollView";
 import { m, type MessageResolver } from "../../../i18n/messages";
 import { copyTextWithHaptic } from "../../../lib/copyTextWithHaptic";
+import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { serverEnvironment } from "../../../state/server";
 import { useEnvironmentScope } from "../../../state/session";
 import { useAtomCommand } from "../../../state/use-atom-command";
@@ -794,9 +795,9 @@ function UrlAuthCard(props: {
               return;
             }
             if (reportCommandFailure(result, gt("Could not continue authentication"))) {
-              void Linking.openURL(props.action.url).catch(() =>
-                Dialog.alert(gt("Could not open the page"), props.action.url),
-              );
+              void tryOpenExternalUrl(props.action.url, "provider-auth").then((opened) => {
+                if (!opened) Dialog.alert(gt("Could not open the page"), props.action.url);
+              });
             }
           });
         }}

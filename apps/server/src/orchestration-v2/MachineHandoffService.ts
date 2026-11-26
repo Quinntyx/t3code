@@ -117,6 +117,11 @@ const make = Effect.gen(function* () {
             const message = historicalMessage(row.item);
             return message === null ? [] : [{ role: message.role, text: message.text }];
           });
+          if (project.value.trackedFolders.length > 0) {
+            return yield* new MachineHandoffError({
+              message: "Machine handoff is not supported for multi-repo projects",
+            });
+          }
           const snapshot: MachineHandoffSnapshot = {
             version: 1,
             sourceEnvironmentId: yield* environment.getEnvironmentId,
@@ -176,6 +181,10 @@ const make = Effect.gen(function* () {
           if (Option.isNone(project))
             return yield* new MachineHandoffError({
               message: "Clone and register the destination project before importing",
+            });
+          if (project.value.trackedFolders.length > 0)
+            return yield* new MachineHandoffError({
+              message: "Machine handoff is not supported for multi-repo projects",
             });
           const identity = digest(yield* encodeImport(input));
           const completedMarker = path.join(

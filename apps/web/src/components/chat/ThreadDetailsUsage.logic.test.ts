@@ -174,4 +174,57 @@ describe("resolveThreadDetailsLimits", () => {
       expect(resolved.windows.map((window) => window.remainingPercent)).toEqual([75]);
     }
   });
+
+  it("selects hub pool vs local OpenCode Go vs ChatGPT usageSource per Pi model family", () => {
+    const piId = ProviderInstanceId.make("pi-multi");
+    const opencode = ProviderDriverKind.make("opencode");
+    const opencodeLimits: ServerProviderUsageLimits = {
+      ...limitsAt(15),
+      ownerDriver: opencode,
+    };
+    const chatgptLimits = limitsAt(40);
+    const piProvider: ServerProvider = {
+      ...claudeInstance(unsupported),
+      instanceId: piId,
+      driver: ProviderDriverKind.make("pi"),
+      auth: { status: "authenticated" },
+      usageLimits: opencodeLimits,
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: codex,
+          limits: chatgptLimits,
+        },
+      ],
+      usageRoutes: [{ origin: "http://localhost:8317", driver: claude }],
+    };
+    const sources = [
+      hub(
+        "Hub",
+        [{ id: "a.json", models: ["claude-opus-4-6"], limits: limitsAt(25) }],
+        "http://127.0.0.1:8317",
+      ),
+    ];
+    // Routed CLIProxyAPI model shows the hub Claude pool, not local ChatGPT or OpenCode Go.
+    const hubResolved = resolveThreadDetailsLimits(
+      piId,
+      "cliproxyapi/claude-opus-4-6",
+      [piProvider],
+      sources,
+      now,
+    );
+    expect(hubResolved?.kind).toBe("pool");
+    if (hubResolved?.kind === "pool") {
+      expect(hubResolved.windows.map((window) => window.remainingPercent)).toEqual([75]);
+    }
+    // Direct OpenCode Go model shows Pi's ownerDriver=opencode usageLimits.
+    expect(
+      resolveThreadDetailsLimits(piId, "opencode-go/glm-5", [piProvider], sources, now),
+    ).toEqual({ kind: "instance", limits: opencodeLimits });
+    // Direct Codex model shows Pi's ChatGPT usageSource.
+    expect(
+      resolveThreadDetailsLimits(piId, "openai-codex/gpt-5.4", [piProvider], sources, now),
+    ).toEqual({ kind: "instance", limits: chatgptLimits });
+  });
 });

@@ -59,13 +59,6 @@ export function UsageLimitRecoveryCard({
   // OpenAI's partner guidelines specify the ChatGPT notice and its action.
   const workspaceLimit = code === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || code === CHATGPT_USAGE_LIMIT_CODE;
-  if (
-    thread.runtime?.status !== "failed" ||
-    // Older servers report ChatGPT sharing limits as provider errors.
-    (thread.runtime.lastErrorClass !== "usage_limit" && !chatGptLimit) ||
-    !runId
-  )
-    return null;
   if (consumptionCapHit !== null) {
     return (
       <View className="mx-3 mb-2 flex-row gap-2 rounded-xl border border-warning-foreground/25 bg-screen p-3">
@@ -79,6 +72,14 @@ export function UsageLimitRecoveryCard({
       </View>
     );
   }
+
+  if (
+    thread.runtime?.status !== "failed" ||
+    // Older servers report ChatGPT sharing limits as provider errors.
+    (thread.runtime.lastErrorClass !== "usage_limit" && !chatGptLimit) ||
+    !runId
+  )
+    return null;
 
   const resumes = canSchedule && scheduled;
   const resumesUpcoming = resumes && !displayPassed;

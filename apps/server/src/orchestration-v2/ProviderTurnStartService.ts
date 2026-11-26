@@ -1071,7 +1071,9 @@ export const layer: Layer.Layer<
       );
       // Part of the user text, so every way a turn starts carries it, after the user's own words.
       const userText =
-        run.outputSchema === undefined || goalCommand || isProviderCommand(providerMessage)
+        run.outputSchema === undefined ||
+        goalCommand ||
+        (isProviderCommand(providerMessage) && !(!goalDriver && parsedGoal?.type === "set"))
           ? messageText
           : `${messageText}\n\n${outputInstructions(run.outputSchema)}`;
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
@@ -1084,7 +1086,13 @@ export const layer: Layer.Layer<
       let compactionMessageIdSet: ReadonlySet<string> | undefined;
       const compactionMessageIds = () =>
         (compactionMessageIdSet ??= new Set(
-          projection.messages.filter(isSlashCommandMessage).map((candidate) => candidate.id),
+          projection.messages
+            .filter(
+              (candidate) =>
+                isSlashCommandMessage(candidate) &&
+                !(!goalDriver && parseGoalCommand(candidate)?.type === "set"),
+            )
+            .map((candidate) => candidate.id),
         ));
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,

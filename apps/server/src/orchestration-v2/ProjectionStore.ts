@@ -5156,7 +5156,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           (
             SELECT r.run_id FROM orchestration_v2_projection_runs r
             WHERE r.thread_id = t.thread_id
-              AND r.status IN ('preparing', 'starting', 'running')
+              AND r.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
             ORDER BY r.ordinal DESC
             LIMIT 1
           ) AS active_run_id,
@@ -5166,14 +5166,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             INNER JOIN orchestration_v2_projection_runs child_run
               ON child_run.thread_id = child.thread_id
             WHERE json_extract(child.payload_json, '$.lineage.parentThreadId') = t.thread_id
-              AND child_run.status IN ('preparing', 'starting', 'running')
+              AND child_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
           ) AS has_active_delegates,
           EXISTS (
             SELECT 1
             FROM orchestration_v2_projection_turn_items item
+            LEFT JOIN orchestration_v2_projection_runs item_run
+              ON item_run.run_id = item.run_id
             WHERE item.thread_id = t.thread_id
               AND item.type IN ('command_execution', 'dynamic_tool', 'subagent')
               AND item.status IN ('pending', 'running', 'waiting')
+              AND (item_run.status IS NULL OR item_run.status <> 'rolled_back')
           ) AS has_active_background_work
         FROM orchestration_v2_projection_threads t
         WHERE t.deleted_at IS NULL
@@ -5485,7 +5488,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           AND t.thread_id IN (
             SELECT failure.thread_id FROM orchestration_v2_projection_turn_items failure
             WHERE failure.type = 'error' AND failure.status = 'failed'
-              AND json_extract(failure.payload_json, '$.failure.overloaded') = 1
+              AND CASE WHEN json_valid(failure.payload_json) THEN
+                json_extract(failure.payload_json, '$.failure.overloaded') = 1
+                ELSE 0 END
           )
           AND json_extract(t.payload_json, '$.archivedAt') IS NULL
           AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
@@ -10202,10 +10207,33 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             OR CASE WHEN ${indexedField("$.awaitedScheduledTaskIds[0]", "json_type")} IS NOT NULL
               THEN 1 ELSE 0 END
             OR t.thread_id IN (
-              SELECT err.thread_id FROM orchestration_v2_projection_turn_items err
+              SELECT err.thread_id
+              FROM orchestration_v2_projection_turn_items err
+              INNER JOIN orchestration_v2_projection_runs latest_run ON latest_run.run_id = (
+                SELECT candidate.run_id FROM orchestration_v2_projection_runs candidate
+                WHERE candidate.thread_id = err.thread_id
+                  AND candidate.status <> 'queued'
+                  AND NOT (
+                    candidate.status = 'cancelled'
+                    AND json_extract(candidate.payload_json, '$.startedAt') IS NULL
+                  )
+                ORDER BY candidate.completed_at IS NULL DESC, candidate.completed_at DESC,
+                  candidate.ordinal DESC, candidate.run_id DESC
+                LIMIT 1
+              )
               WHERE err.type = 'error'
                 AND err.status = 'failed'
-                AND json_extract(err.payload_json, '$.failure.overloaded') IS 1
+                AND CASE WHEN json_valid(err.payload_json) THEN
+                  json_extract(err.payload_json, '$.failure.overloaded') = 1
+                  ELSE 0 END
+                AND err.run_id = latest_run.run_id
+                AND latest_run.status = 'failed'
+                AND NOT EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_turn_items stop
+                  WHERE stop.thread_id = err.thread_id
+                    AND stop.run_id = latest_run.run_id
+                    AND stop.type = 'run_interrupt_request'
+                )
             )
           ) AS may_be_live,
           -- One list for the whole read, found through the child_thread_id index. A lookup per

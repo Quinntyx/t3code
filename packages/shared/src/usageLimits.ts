@@ -56,39 +56,6 @@ export function usageOrigin(value: string): string | null {
   }
 }
 
-function usageRoutesByOrigin(provider: ServerProvider): ReadonlyMap<string, ReadonlySet<string>> {
-  const routes = new Map<string, Set<string>>();
-  const endpointOrigin = provider.auth.endpoint ? usageOrigin(provider.auth.endpoint) : null;
-  if (endpointOrigin) {
-    routes.set(endpointOrigin, new Set([String(provider.driver)]));
-  }
-  for (const route of provider.usageRoutes ?? []) {
-    const origin = usageOrigin(route.origin);
-    if (!origin) continue;
-    const drivers = routes.get(origin) ?? new Set<string>();
-    drivers.add(String(route.driver));
-    routes.set(origin, drivers);
-  }
-  return routes;
-}
-
-/**
- * Drivers an instance can reach at a hub's origin. `null` keeps the same-driver fallback for a
- * provider whose routes are unknown, and an empty set hides a hub it cannot reach.
- */
-function hubRouteDrivers(
-  _provider: ServerProvider,
-  routesByOrigin: ReadonlyMap<string, ReadonlySet<string>>,
-  source: Pick<UsageLimitSourceSnapshot, "origin" | "endpoint">,
-): ReadonlySet<string> | null {
-  const rawOrigin = source.origin ?? source.endpoint;
-  const origin = rawOrigin ? usageOrigin(rawOrigin) : null;
-  const drivers = origin ? routesByOrigin.get(origin) : undefined;
-  if (drivers) return drivers;
-  // A source without an origin cannot be matched, so it keeps the driver fallback.
-  return origin && routesByOrigin.size > 0 ? new Set() : null;
-}
-
 type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
 
 function exhaustedUsageWindows(
@@ -1160,7 +1127,19 @@ export function hasProviderUsageLimits(
   sources: UsageLimitSourceSnapshots,
 ): boolean {
   return (
-    providersWithLimits(providers).some((provider) => provider.driver === driver) ||
+    providersWithLimits(providers).some(
+      (provider) => provider.driver === driver || provider.usageLimits?.ownerDriver === driver,
+    ) ||
+    providers.some(
+      (provider) =>
+        provider.enabled &&
+        (provider.usageSources ?? []).some(
+          (source) =>
+            source.driver === driver &&
+            limitsNotice(source.limits) === null &&
+            source.limits.windows.length > 0,
+        ),
+    ) ||
     sources.some(
       (source) =>
         source.accounts.some((account) => account.driver === driver) ||
@@ -1232,27 +1211,39 @@ export function resolveInstanceHubRoutes(
   readonly driver: ServerProvider["driver"];
   readonly hubs: UsageLimitSourceSnapshots;
   readonly origins: readonly string[];
+  readonly driversByOrigin: ReadonlyMap<string, ReadonlySet<ServerProvider["driver"]>>;
+  readonly directOnly: boolean;
 } {
   const driver = quotaDriverForModel(provider.driver, model);
-  const modelProvider = model?.split("/")[0];
+  const modelProvider = model?.split(/[/:]/)[0];
   if (provider.driver === "pi" && model != null && !isPiHubModelProvider(modelProvider)) {
-    return { driver, hubs: [], origins: [] };
+    return { driver, hubs: [], origins: [], driversByOrigin: new Map(), directOnly: true };
   }
-  const origins = new Set<string>();
-  const endpointOrigin = provider.auth.endpoint ? usageOrigin(provider.auth.endpoint) : null;
-  if (endpointOrigin) origins.add(endpointOrigin);
+  const driversByOrigin = new Map<string, Set<ServerProvider["driver"]>>();
+  const addOriginDriver = (raw: string, routeDriver: ServerProvider["driver"]) => {
+    const origin = usageOrigin(raw);
+    if (!origin) return;
+    const set = driversByOrigin.get(origin) ?? new Set<ServerProvider["driver"]>();
+    set.add(routeDriver);
+    driversByOrigin.set(origin, set);
+  };
+  if (provider.auth.endpoint) {
+    addOriginDriver(provider.auth.endpoint, provider.driver);
+    if (driver !== provider.driver) addOriginDriver(provider.auth.endpoint, driver);
+  }
   for (const route of provider.usageRoutes ?? []) {
     if (model != null && route.driver !== driver) continue;
-    const origin = usageOrigin(route.origin);
-    if (origin) origins.add(origin);
+    addOriginDriver(route.origin, route.driver);
   }
-  if (origins.size === 0) return { driver, hubs: [], origins: [] };
+  if (driversByOrigin.size === 0) {
+    return { driver, hubs: [], origins: [], driversByOrigin, directOnly: false };
+  }
   const hubs = sources.filter((source) => {
     const rawOrigin = source.origin ?? source.endpoint;
     const origin = rawOrigin ? usageOrigin(rawOrigin) : null;
-    return origin !== null && origins.has(origin);
+    return origin !== null && driversByOrigin.has(origin);
   });
-  return { driver, hubs, origins: [...origins] };
+  return { driver, hubs, origins: [...driversByOrigin.keys()], driversByOrigin, directOnly: false };
 }
 
 const CLAUDE_SCOPED_WINDOW_PREFIX = "seven_day_";
@@ -1360,17 +1351,22 @@ export function collectProviderUsageLimits(
   const selected = providers.find((provider) => provider.instanceId === instanceId);
   if (!selected) return null;
   // Only an instance sent to a hub is known to reach the accounts that hub routes its model to.
-  const { driver: quotaDriver, hubs } = resolveInstanceHubRoutes(selected, sources, model);
+  const {
+    driver: quotaDriver,
+    hubs,
+    origins,
+    directOnly,
+  } = resolveInstanceHubRoutes(selected, sources, model);
   const routes =
     hubs.length > 0
       ? hubRoutes(hubs, quotaDriver, model)
       : (account: UsageLimitSourceAccount) => account.driver === quotaDriver;
-  const shownHubs = hubs.length > 0 ? hubs : sources;
+  const shownHubs = directOnly || origins.length > 0 ? hubs : sources;
   const drivers = new Set(
     shownHubs.flatMap((source) => source.accounts.filter(routes).map((account) => account.driver)),
   );
-  if (drivers.size === 0) drivers.add(selected.driver);
-  if (![...drivers].some((driver) => hasProviderUsageLimits(driver, providers, sources))) {
+  if (drivers.size === 0) drivers.add(quotaDriver);
+  if (![...drivers].some((driver) => hasProviderUsageLimits(driver, providers, shownHubs))) {
     return null;
   }
   const resolveKey = accountKeyResolver([
@@ -1483,6 +1479,12 @@ export function collectProviderUsageLimits(
   for (const source of selected.usageSources ?? []) {
     // Quota windows only; a money-only login is not part of the agent-facing limits report.
     if (limitsNotice(source.limits) !== null || source.limits.windows.length === 0) continue;
+    if (routedKeys) {
+      const accountKey = resolveKey(usageSourceReport(source));
+      if (accountKey === null || !routedKeys.has(accountKey)) continue;
+    } else if (!drivers.has(source.driver)) {
+      continue;
+    }
     accounts.push({
       id: `${selected.instanceId}:${source.id}`,
       driver: source.driver,
@@ -1648,7 +1650,7 @@ export function summarizeProviderLimits(
       });
     }),
   );
-  const routesByOrigin = usageRoutesByOrigin(provider);
+  const { hubs, origins, driversByOrigin } = resolveInstanceHubRoutes(provider, sources);
   const localSources = (provider.usageSources ?? []).flatMap((source) => {
     // The picker shows bars, so a windowless money-only login has nothing to draw there.
     if (!usable(source.limits) || source.limits.windows.length === 0) return [];
@@ -1674,12 +1676,16 @@ export function summarizeProviderLimits(
       ? [{ id: `provider:${source.id}`, label: source.label, windows: summarizePool(pool, now) }]
       : [];
   });
-  const pooled = sources.flatMap((source) => {
-    const routeDrivers = hubRouteDrivers(provider, routesByOrigin, source);
-    const drivers = routeDrivers ?? new Set([String(provider.driver)]);
+  const reachableSources =
+    origins.length > 0 ? hubs : sources.filter((source) => !(source.origin ?? source.endpoint));
+  const pooled = reachableSources.flatMap((source) => {
+    const rawOrigin = source.origin ?? source.endpoint;
+    const sourceOrigin = rawOrigin ? usageOrigin(rawOrigin) : null;
+    const drivers =
+      (sourceOrigin ? driversByOrigin.get(sourceOrigin) : undefined) ?? new Set([provider.driver]);
     const groups = new Map<string, LimitAccount[]>();
     for (const account of source.accounts) {
-      if (!drivers.has(String(account.driver)) || !usable(account.usageLimits)) continue;
+      if (!drivers.has(account.driver) || !usable(account.usageLimits)) continue;
       const key = resolveKey(account);
       if (key !== null && nativeKeys.has(key)) continue;
       const group = groups.get(String(account.driver)) ?? [];
@@ -1713,9 +1719,13 @@ export function summarizeProviderLimits(
     });
   });
   if (!own && localSources.length === 0 && pooled.length === 0) return null;
+  const ownExhausted = exhaustedUsageWindow(provider, now) !== undefined;
+  const pooledExhausted =
+    pooled.length > 0 &&
+    pooled.every((entry) => entry.windows.some((window) => window.remainingPercent <= 0));
   return {
     windows: own ? summarizePool(own, now) : [],
     sources: [...localSources, ...pooled],
-    exhausted: exhaustedUsageWindow(provider, now) !== undefined,
+    exhausted: own ? ownExhausted : pooledExhausted,
   };
 }

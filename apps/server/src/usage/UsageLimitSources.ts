@@ -4,7 +4,6 @@ import {
   type ProviderConsumeResetCreditOutcome,
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
-  type ProviderDriverKind,
   type ServerProvider,
   type ServerSettings,
   UsageLimitSourceConfig,
@@ -13,7 +12,7 @@ import {
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { hubPoolResetAt, usageOrigin } from "@t3tools/shared/usageLimits";
+import { hubPoolResetAt, resolveInstanceHubRoutes } from "@t3tools/shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -336,41 +335,30 @@ export { hubPoolResetAt };
 
 export class UsageLimitResetFallback extends Context.Reference<{
   readonly resetAt: (
-    driver: ProviderDriverKind,
-    endpoint: string,
+    provider: Pick<ServerProvider, "driver" | "auth" | "usageRoutes">,
     model: string | null,
   ) => Effect.Effect<string | null>;
 }>("t3/usage/UsageLimitResetFallback", {
   defaultValue: () => ({ resetAt: () => Effect.succeed(null) }),
 }) {}
 
-function sameHubOrigin(source: UsageLimitSourceSnapshot, endpoint: string): boolean {
-  const rawOrigin = source.origin ?? source.endpoint;
-  if (!rawOrigin) return false;
-  const normalizedEndpoint = usageOrigin(endpoint);
-  const normalizedSource = usageOrigin(rawOrigin);
-  if (normalizedEndpoint !== null && normalizedSource !== null) {
-    return normalizedEndpoint === normalizedSource;
-  }
-  return rawOrigin === endpoint;
-}
-
 export const layerResetFallback = Layer.effect(
   UsageLimitResetFallback,
   Effect.gen(function* () {
     const sources = yield* UsageLimitSources;
     return {
-      resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (driver, endpoint, model) {
-        // Only the hub at the instance's endpoint serves its turns.
-        const atEndpoint = Effect.map(sources.current, (current) =>
-          current.filter((source) => sameHubOrigin(source, endpoint)),
+      resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (provider, model) {
+        // Only the hubs routed for this provider and model serve its turns.
+        const matched = Effect.map(sources.current, (current) =>
+          resolveInstanceHubRoutes(provider, current, model),
         );
-        if ((yield* atEndpoint).length === 0) return null;
+        if ((yield* matched).hubs.length === 0) return null;
         // The pool usually ran out after the last poll, so the cached accounts still show room.
         yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
+        const refreshed = yield* matched;
         return hubPoolResetAt(
-          yield* atEndpoint,
-          driver,
+          refreshed.hubs,
+          refreshed.driver,
           model,
           DateTime.toEpochMillis(yield* DateTime.now),
         );

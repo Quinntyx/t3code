@@ -11,7 +11,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-export const SERVICES_CONFIG_FILENAME = "services.json";
+const SERVICES_CONFIG_FILENAME = "services.json";
 
 const ServiceId = Schema.String.check(
   Schema.isMinLength(1),

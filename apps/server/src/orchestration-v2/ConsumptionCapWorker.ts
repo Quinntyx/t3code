@@ -5,9 +5,11 @@ import {
   type ThreadConsumptionCapHit,
   type ThreadId,
 } from "@t3tools/contracts";
+import { collectLimitPools, resolveInstanceHubRoutes } from "@t3tools/shared/usageLimits";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -18,6 +20,7 @@ import {
   evaluateConsumptionCap,
 } from "../usage/consumptionCap.ts";
 import * as ThreadUsageService from "../usage/ThreadUsageService.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -53,10 +56,15 @@ const makeSweep = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const usage = yield* ThreadUsageService.ThreadUsageService;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const usageSources = Option.getOrUndefined(
+    yield* Effect.serviceOption(UsageLimitSources.UsageLimitSources),
+  );
 
   const readWindows = Effect.fn("ConsumptionCapWorker.readWindows")(function* (
     instanceIds: ReadonlySet<ProviderInstanceId>,
+    nowMs: number,
   ) {
+    const currentSources = usageSources ? yield* usageSources.current : [];
     const windowsByInstance = new Map<
       string,
       ReadonlyArray<{
@@ -70,16 +78,77 @@ const makeSweep = Effect.gen(function* () {
     for (const instanceId of instanceIds) {
       const instance = yield* instances.getInstance(instanceId);
       const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
-      windowsByInstance.set(
-        instanceId,
-        (snapshot?.usageLimits?.windows ?? []).map((window) => ({
+      const windows: Array<{
+        id: string;
+        kind: "session" | "weekly" | "monthly" | "other";
+        label: string;
+        usedPercent: number;
+        resetsAt: string | null;
+      }> = [];
+      for (const window of snapshot?.usageLimits?.windows ?? []) {
+        windows.push({
           id: window.id,
           kind: window.kind,
           label: window.label,
           usedPercent: window.usedPercent,
           resetsAt: window.resetsAt ?? null,
-        })),
-      );
+        });
+      }
+      for (const source of snapshot?.usageSources ?? []) {
+        if (source.limits.unavailable) continue;
+        for (const window of source.limits.windows) {
+          windows.push({
+            id: `${source.id}:${window.id}`,
+            kind: window.kind,
+            label: window.label,
+            usedPercent: window.usedPercent,
+            resetsAt: window.resetsAt ?? null,
+          });
+        }
+      }
+      if (snapshot && currentSources.length > 0) {
+        const { hubs, driversByOrigin } = resolveInstanceHubRoutes(snapshot, currentSources);
+        for (const hub of hubs) {
+          const hubAccounts = hub.accounts.filter((account) => {
+            if (account.usageLimits.unavailable) return false;
+            const origin = hub.origin ?? hub.endpoint;
+            if (!origin) return account.driver === snapshot.driver;
+            for (const drivers of driversByOrigin.values()) {
+              if (drivers.has(account.driver)) return true;
+            }
+            return account.driver === snapshot.driver;
+          });
+          const pools = collectLimitPools(
+            hubAccounts.map((account) => ({
+              key: `${hub.id}:${account.id}`,
+              driver: account.driver,
+              displayName: null,
+              email: account.email,
+              workspaceId: account.workspaceId,
+              plan: account.plan,
+              accentColor: undefined,
+              environments: [],
+              sourceLabel: hub.label,
+              redeem: null,
+              limits: account.usageLimits,
+            })),
+            nowMs,
+          );
+          for (const pool of pools) {
+            for (const window of pool.windows) {
+              const nextReset = window.resets.find((reset) => reset.at > nowMs);
+              windows.push({
+                id: `${hub.id}:${pool.driver}:${window.id}`,
+                kind: window.kind,
+                label: window.label,
+                usedPercent: Math.max(0, Math.min(100, 100 - window.remainingPercent)),
+                resetsAt: nextReset ? DateTime.formatIso(DateTime.makeUnsafe(nextReset.at)) : null,
+              });
+            }
+          }
+        }
+      }
+      windowsByInstance.set(instanceId, windows);
     }
     return windowsByInstance;
   });
@@ -103,6 +172,7 @@ const makeSweep = Effect.gen(function* () {
         const usageModels = threadUsage.models.map(capModel);
         const windowsByInstance = yield* readWindows(
           quotaInstances(cap, usageModels, thread.providerInstanceId),
+          nowMs,
         );
         const evaluation = evaluateConsumptionCap(
           cap,

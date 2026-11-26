@@ -501,6 +501,16 @@ export default defineConfig({
         rules: { "t3code/no-ambiguous-detail-navigation": "error" },
       },
       {
+        // A failed open rejects; tryOpenExternalUrl reports it and resolves false instead.
+        files: ["apps/mobile/src/**"],
+        excludeFiles: [
+          "apps/mobile/src/lib/openExternalUrl.ts",
+          "apps/mobile/src/features/development/**",
+          "**/*.test.{ts,tsx}",
+        ],
+        rules: { "t3code/no-direct-linking-open-url": "error" },
+      },
+      {
         // Raw ResizeObserver state commits miss the paint; observeResize flushes derived layout together.
         files: ["apps/web/src/**"],
         excludeFiles: [

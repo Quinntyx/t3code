@@ -132,6 +132,7 @@ function summary(
 const makeService = Effect.fn("makeStackService")(function* (input: {
   readonly root: string;
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+  readonly archivedThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly summaries: ReadonlyArray<PullRequestSummary>;
   readonly failMerge?: number;
   readonly supportsNativeStacks?: boolean;
@@ -217,7 +218,7 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
               schemaVersion: 1,
               snapshotSequence: 1,
               threads: input.threads,
-              archivedThreads: [],
+              archivedThreads: input.archivedThreads ?? [],
             }),
           getThreadShell: (threadId) =>
             Effect.succeed(input.threads.find((candidate) => candidate.id === threadId) ?? null),
@@ -653,11 +654,69 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
         assert.deepStrictEqual(yield* tanstackStyle.service.mergeStack(target), { merged: [2, 3] });
         assert.deepStrictEqual(tanstackStyle.merges, [3]);
         assert.deepStrictEqual(tanstackStyle.nativeStackMerges, []);
+
+        // TanStack Source style: requireMultiLayer refuses a single-layer stack, and short expectedHeadSha resolves to full headSha.
+        const fullHead = "abcdef1234567890abcdef1234567890abcdef12";
+        const tanstackSingle = yield* makeService({
+          root,
+          threads: [],
+          summaries: [
+            summary(3, "c", "main", "open", {
+              headSha: fullHead,
+              stack: { number: 9, position: 1, size: 1, base: "main" },
+            }),
+          ],
+          supportsNativeStacks: false,
+          nativeStack: Effect.succeed({
+            id: "stack-9",
+            number: 9,
+            url: "https://source.test/stacks/9",
+            base: "main",
+            layers: [{ number: 3, state: "open", headBranch: "c", headSha: fullHead }],
+          }),
+        });
+        const singleErr = yield* tanstackSingle.service
+          .mergeStack({ ...target, requireMultiLayer: true, expectedHeadSha: "abcdef12" })
+          .pipe(Effect.flip);
+        assert.include(singleErr.message, "not in a stack this host can merge");
+
+        const tanstackShortSha = yield* makeService({
+          root,
+          threads: [],
+          summaries: [
+            summary(3, "c", "b", "open", {
+              headSha: fullHead,
+              stack: { number: 9, position: 2, size: 2, base: "main" },
+            }),
+          ],
+          supportsNativeStacks: false,
+          nativeStack: Effect.succeed({
+            id: "stack-9",
+            number: 9,
+            url: "https://source.test/stacks/9",
+            base: "main",
+            layers: [
+              { number: 2, state: "open", headBranch: "b", headSha: "22222222" },
+              { number: 3, state: "open", headBranch: "c", headSha: fullHead },
+            ],
+          }),
+        });
+        assert.deepStrictEqual(
+          yield* tanstackShortSha.service.mergeStack({
+            ...target,
+            requireMultiLayer: true,
+            expectedHeadSha: "abcdef12",
+          }),
+          { merged: [2, 3] },
+        );
+        assert.deepStrictEqual(tanstackShortSha.mergeExpectedHeads, [
+          { number: 3, expectedHeadSha: fullHead },
+        ]);
       }),
     );
 
     it.effect(
-      "refuses restacking a shared-checkout thread while another thread is active there",
+      "refuses restacking a shared-checkout thread while another active or archived thread is busy there",
       () =>
         Effect.gen(function* () {
           const { root, worktrees } = yield* makeRepository;
@@ -685,6 +744,31 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
           const err = yield* sharedHarness.service.mergeStack(target).pipe(Effect.flip);
           assert.deepStrictEqual(sharedHarness.merges, [1]);
           assert.include(err.message, "a turn was running");
+
+          // Archived thread with an active run in the same shared checkout also blocks restacking.
+          const { root: rootArchived, worktrees: wtArchived } = yield* makeRepository;
+          const { resolveHeadSha: resolveArchived } = yield* attachOrigin(rootArchived, wtArchived);
+          const baseArchived = stack(wtArchived);
+          const archivedHarness = yield* makeService({
+            root: rootArchived,
+            resolveHeadSha: resolveArchived,
+            threads: baseArchived.threads.map((thread) =>
+              thread.branch === "b" ? { ...thread, worktreePath: null } : thread,
+            ),
+            archivedThreads: [
+              {
+                ...baseArchived.threads[0]!,
+                id: ThreadId.make("thread-archived-busy"),
+                branch: "archived-other",
+                worktreePath: null,
+                activityRunStatus: "running",
+              },
+            ],
+            summaries: baseArchived.summaries,
+          });
+          const archivedErr = yield* archivedHarness.service.mergeStack(target).pipe(Effect.flip);
+          assert.deepStrictEqual(archivedHarness.merges, [1]);
+          assert.include(archivedErr.message, "a turn was running");
         }),
     );
 
