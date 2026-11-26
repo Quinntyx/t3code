@@ -162,6 +162,97 @@ it.effect("refuses waiting items and background work even when the provider is i
   }),
 );
 
+it.effect("rejects multi-repo projects before reading the thread transcript", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("multi-repo-export");
+    const projectId = ProjectId.make("multi-repo-project");
+    const providerInstanceId = ProviderInstanceId.make("source");
+    const now = DateTime.makeUnsafe("2026-10-01T00:00:00Z");
+    const projection = emptyProjection({
+      id: EventId.make("multi-repo-created"),
+      type: "thread.created",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: threadId,
+        createdBy: "user",
+        creationSource: "web",
+        projectId,
+        title: "Multi-repo thread",
+        providerInstanceId,
+        modelSelection: { instanceId: providerInstanceId, model: "test" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+    });
+    let transcriptReads = 0;
+    const dependencies = Layer.mergeAll(
+      ServerConfig.layerTest("/tmp", "/tmp/t3-export-multirepo-test"),
+      ServerSettings.layerTest(),
+      ThreadCommandExecutor.layer,
+      Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("source")),
+      }),
+      Layer.mock(GitManager.GitManager)({}),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+      Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({}),
+      Layer.mock(ProjectStore.ProjectStoreV2)({
+        get: () =>
+          Effect.succeedSome({
+            projectId,
+            title: "Multi-repo",
+            hasCustomTitle: false,
+            workspaceRoot: "/tmp/multi-repo",
+            defaultModelSelection: null,
+            defaultThreadEnvMode: null,
+            autoPull: false,
+            faviconPath: null,
+            projectIcon: null,
+            scripts: [],
+            trackedFolders: [{ path: "subrepo", name: "Subrepo" }],
+            pinnedAt: null,
+            archivedAt: null,
+            createdAt: "2026-10-01T00:00:00Z",
+            updatedAt: "2026-10-01T00:00:00Z",
+            deletedAt: null,
+          }),
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadSnapshot: () =>
+          Effect.succeed({ schemaVersion: 2, snapshotSequence: 0, projection }),
+        getThreadTranscript: () =>
+          Effect.sync(() => {
+            transcriptReads++;
+            return { messages: [], turnItems: [] };
+          }) as never,
+      }),
+    );
+    const service = yield* MachineHandoffService.MachineHandoffService.pipe(
+      Effect.provide(
+        MachineHandoffService.layer.pipe(
+          Layer.provide(dependencies),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+    const failure = yield* service.exportSnapshot({ threadId }).pipe(Effect.flip);
+    expect(failure.message).toContain("multi-repo");
+    expect(transcriptReads).toBe(0);
+  }),
+);
+
 it.effect.each([
   { layout: "standard", containerLayout: true, configuredDirectory: false, linkedSource: true },
   {

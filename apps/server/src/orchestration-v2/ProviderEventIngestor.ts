@@ -30,7 +30,11 @@ import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
-import { usageLimitResetAt } from "@t3tools/shared/usageLimits";
+import {
+  resolveInstanceHubRoutes,
+  usageLimitResetAt,
+  usageSourcesResetAt,
+} from "@t3tools/shared/usageLimits";
 import {
   ProviderTurnAnalytics,
   type ProviderTurnAnalyticsContext,
@@ -276,9 +280,18 @@ export const layer: Layer.Layer<
     ): Effect.Effect<string | null> => {
       if (!snapshot) return Effect.succeed(null);
       const now = DateTime.toEpochMillis(occurredAt);
-      const localReset = usageLimitResetAt(snapshot, now, model);
-      if (localReset !== null) return Effect.succeed(localReset);
-      return usageLimitResets.resetAt({ ...snapshot, driver: snapshot.driver ?? driver }, model);
+      const normalized = { ...snapshot, driver: snapshot.driver ?? driver };
+      const localReset = () =>
+        usageLimitResetAt(normalized, now, model) ?? usageSourcesResetAt(normalized, now, model);
+      // Hub-routed instances spend their hub pool, so refresh/query the hub before local limits.
+      if (resolveInstanceHubRoutes(normalized, [], model).origins.length > 0) {
+        return usageLimitResets
+          .resetAt(normalized, model)
+          .pipe(Effect.map((hubReset) => hubReset ?? localReset()));
+      }
+      const local = localReset();
+      if (local !== null) return Effect.succeed(local);
+      return usageLimitResets.resetAt(normalized, model);
     };
 
     const makeDomainEvent =

@@ -10,7 +10,12 @@ import {
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { usageLimitResetAt, usageLimitSourceResetAt } from "@t3tools/shared/usageLimits";
+import {
+  resolveInstanceHubRoutes,
+  usageLimitResetAt,
+  usageLimitSourceResetAt,
+  usageSourcesResetAt,
+} from "@t3tools/shared/usageLimits";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -282,9 +287,13 @@ const makeSweep = Effect.gen(function* () {
           if (instance === undefined) return;
           const snapshot = yield* instance.snapshot.getSnapshot;
           const model = run.modelSelection.model;
-          const resetAt =
+          const hubRouted = resolveInstanceHubRoutes(snapshot, sources, model).hubs.length > 0;
+          const localReset = () =>
             usageLimitResetAt(snapshot, nowMs, model) ??
-            usageLimitSourceResetAt(sources, snapshot, nowMs, model);
+            usageSourcesResetAt(snapshot, nowMs, model);
+          const resetAt = hubRouted
+            ? (usageLimitSourceResetAt(sources, snapshot, nowMs, model) ?? localReset())
+            : (localReset() ?? usageLimitSourceResetAt(sources, snapshot, nowMs, model));
           if (resetAt === null) return;
           yield* eventSink.writeWithEffects({
             fillUsageLimitResetAtOnly: true,

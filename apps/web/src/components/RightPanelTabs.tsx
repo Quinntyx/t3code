@@ -1666,9 +1666,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     )}
                     audio={mute?.state ?? "none"}
                     audioSilent={mute?.silent ?? false}
-                    audioRuntimeTabId={
-                      previewTabId ? (props.previewRuntimeTabId?.(previewTabId) ?? null) : null
-                    }
+                    audioRuntimeTabId={audioRuntimeTabId}
                     audioSessionTabId={streamedTabId}
                     audioUnavailable={unavailableAudioTabIds.has(streamedTabId ?? "")}
                     previewUrl={favicon.url}

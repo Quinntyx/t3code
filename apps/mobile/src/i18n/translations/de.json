@@ -1,13 +1,11 @@
 {
-  "4bcfa3b976a421cf": "Nebenchat",
-  "23be753133ae6950": "Thread",
-  "0001ae5846061bb6": "Thread auf {machine}",
   "68f55a32be30741f": "Zurückgestellt",
   "83f21685be4a1e26": "Zurückgestellt auf {machine}",
   "6e67ab167cd02e15": "Erledigt",
   "ba5e42212f978e52": "Erledigt auf {machine}",
   "370aa80e162adbf6": "Aktiv",
   "26797d614bb4781b": "Aktiv auf {machine}",
+  "4bcfa3b976a421cf": "Nebenchat",
   "eef7f4dacbc3c3f2": "Rechner",
   "422ced5cda40580e": "Basis-Branch fetchen",
   "47e6147265a28164": "Dateien auschecken",
@@ -5858,6 +5856,7 @@
   "904cfc367ae339b3": "{name} wird heruntergeladen",
   "1640648c0bcc005a": "{name} wird vorbereitet",
   "d9c427b8eee47ebd": "Über {name}",
+  "165a135b316e0054": "Die Seite konnte nicht geöffnet werden",
   "a272b8a91501acee": "{name} bereits hinzugefügt",
   "1a911e3dd1e69be8": "Hinzufügen",
   "84ca50abac9e84ae": "ACP-Sitzungen konnten nicht aufgelistet werden",
@@ -6123,7 +6122,6 @@
   "957a0e199cb3abf0": "Authentifizierungsanfrage abgelaufen",
   "9cd6647baae39b79": "Aktualisiere den Anbieter und starte die Authentifizierung erneut.",
   "34e971a4cd3cfdf3": "Authentifizierung konnte nicht fortgesetzt werden",
-  "165a135b316e0054": "Die Seite konnte nicht geöffnet werden",
   "145be1cadcb811f9": [
     "Dieser Anbieter ist auf ",
     {

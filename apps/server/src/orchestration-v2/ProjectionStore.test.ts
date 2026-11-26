@@ -12759,6 +12759,23 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             assert.notMatch(detail, /^SCAN orchestration_v2_projection_turn_items\b/);
           }
         }
+        for (const statement of indexStatements) {
+          const plan = (yield* sql.unsafe<{ readonly detail: string }>(
+            `EXPLAIN QUERY PLAN ${statement}`,
+          )).map((row) => row.detail);
+          assert.isTrue(
+            plan.some((detail) =>
+              detail.includes("orchestration_v2_projection_threads_thread_watches_idx"),
+            ),
+            `Expected thread_watches partial index in query plan:\n${plan.join("\n")}`,
+          );
+          assert.isTrue(
+            plan.some((detail) =>
+              detail.includes("orchestration_v2_projection_threads_awaited_scheduled_idx"),
+            ),
+            `Expected awaited_scheduled partial index in query plan:\n${plan.join("\n")}`,
+          );
+        }
 
         // A subsequent completed run clears stalled liveness so mayBeLive returns to false.
         const recoveredRunId = RunId.make("run:may-be-live:stalled:recovered");
@@ -13014,11 +13031,99 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           status: "waiting",
         },
       });
+      const { statements: capStatements, tracer: capTracer } = traceSqlStatements();
+      assert.deepEqual(
+        yield* store.getConsumptionCapCandidates().pipe(Effect.withTracer(capTracer)),
+        [
+          {
+            thread: (yield* store.getThreadProjection(threadId)).thread,
+            activeRunId: waitingRunId,
+            hasActiveDelegates: true,
+            hasActiveBackgroundWork: false,
+          },
+        ],
+      );
+      const capSql = yield* SqlClient.SqlClient;
+      for (const statement of capStatements) {
+        const plan = (yield* capSql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN ${statement}`,
+        )).map((row) => row.detail);
+        assert.isTrue(
+          plan.some((detail) =>
+            detail.includes("orchestration_v2_projection_threads_consumption_cap_idx"),
+          ),
+          `Expected consumption_cap partial index in query plan:\n${plan.join("\n")}`,
+        );
+        for (const detail of plan) {
+          assert.notMatch(detail, /^SCAN (t|child|child_run|item|r)\b(?! USING INDEX)/);
+        }
+      }
+
+      // Completing the subagent child and starting a forked child must report hasActiveDelegates: false.
+      const forkedChildId = ThreadId.make("thread:consumption-cap-candidates:fork");
+      const forkedRunId = RunId.make("run:consumption-cap-candidates:fork");
+      const afterSubagentAt = DateTime.add(rolledBackAt, { seconds: 1 });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:child-run-completed"),
+        type: "run.updated",
+        threadId: childThreadId,
+        runId: childRunId,
+        driver,
+        providerInstanceId,
+        occurredAt: afterSubagentAt,
+        payload: {
+          ...(yield* store.getThreadProjection(childThreadId)).runs[0]!,
+          status: "completed",
+          completedAt: afterSubagentAt,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:fork-thread"),
+        type: "thread.created",
+        threadId: forkedChildId,
+        occurredAt: afterSubagentAt,
+        payload: {
+          ...threadPayload,
+          id: forkedChildId,
+          title: "Forked child",
+          lineage: {
+            parentThreadId: threadId,
+            relationshipToParent: "fork",
+            rootThreadId: threadId,
+          },
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:fork-run"),
+        type: "run.created",
+        threadId: forkedChildId,
+        runId: forkedRunId,
+        driver,
+        providerInstanceId,
+        occurredAt: afterSubagentAt,
+        payload: {
+          id: forkedRunId,
+          threadId: forkedChildId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:consumption-cap-candidates:fork"),
+          rootNodeId: NodeId.make("node:consumption-cap-candidates:fork"),
+          activeAttemptId: null,
+          status: "running",
+          requestedAt: afterSubagentAt,
+          startedAt: afterSubagentAt,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
       assert.deepEqual(yield* store.getConsumptionCapCandidates(), [
         {
           thread: (yield* store.getThreadProjection(threadId)).thread,
           activeRunId: waitingRunId,
-          hasActiveDelegates: true,
+          hasActiveDelegates: false,
           hasActiveBackgroundWork: false,
         },
       ]);

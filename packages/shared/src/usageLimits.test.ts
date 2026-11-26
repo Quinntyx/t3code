@@ -2189,6 +2189,76 @@ describe("hub routing and pool resets", () => {
     const routedSummary = summarizeProviderLimits(piProvider, [piProvider], [hubA], now);
     expect(routedSummary?.exhausted).toBe(true);
     expect(routedSummary?.sources.map((source) => source.id)).toEqual(["hub-a:claudeAgent"]);
+    // A healthy localSource prevents false exhaustion when a routed hub pool is exhausted.
+    const piWithHealthyLocal: ServerProvider = {
+      ...piProvider,
+      usageLimits: undefined,
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: codex,
+          limits: {
+            checkedAt,
+            windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 25 }],
+          },
+        },
+      ],
+    };
+    expect(
+      summarizeProviderLimits(piWithHealthyLocal, [piWithHealthyLocal], [hubA], now)?.exhausted,
+    ).toBe(false);
+    // All-exhausted localSources without hubs reports exhausted: true.
+    const piOnlyExhaustedLocal: ServerProvider = {
+      ...piProvider,
+      usageLimits: undefined,
+      usageRoutes: [],
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: codex,
+          limits: {
+            checkedAt,
+            windows: [spentWindow],
+          },
+        },
+      ],
+    };
+    expect(
+      summarizeProviderLimits(piOnlyExhaustedLocal, [piOnlyExhaustedLocal], [], now)?.exhausted,
+    ).toBe(true);
+    // Non-Claude/non-Codex v8 CLIProxyAPI models on Pi still match configured hub routes.
+    const openrouter = ProviderDriverKind.make("openrouter");
+    const v8Hub = {
+      id: UsageLimitSourceId.make("v8-routed"),
+      kind: "cliproxy" as const,
+      label: "V8 Hub",
+      origin: "http://127.0.0.1:8317",
+      checkedAt,
+      accounts: [
+        {
+          id: "openrouter:1",
+          driver: openrouter,
+          models: ["z-ai/glm-5.3-flash"],
+          usageLimits: { checkedAt, windows: [spentWindow] },
+        },
+      ],
+    };
+    expect(
+      resolveInstanceHubRoutes(piProvider, [v8Hub], "cliproxyapi/z-ai/glm-5.3-flash").hubs.map(
+        (source) => source.id,
+      ),
+    ).toEqual(["v8-routed"]);
+    expect(
+      collectProviderUsageLimits(
+        piProvider.instanceId,
+        [piProvider],
+        [v8Hub],
+        now,
+        "cliproxyapi/z-ai/glm-5.3-flash",
+      )?.accounts.map((account) => account.id),
+    ).toEqual(["v8-routed:openrouter:1"]);
   });
 
   it("routes vendor-namespaced v8 slugs and ignores expired windows in hubPoolResetAt", () => {

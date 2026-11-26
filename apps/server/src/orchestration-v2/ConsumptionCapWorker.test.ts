@@ -310,5 +310,79 @@ describe("consumption cap sweep", () => {
       "thread.metadata.update",
       "thread.stop",
     ]);
+
+    // Multi-hub origin isolation: Hub A is routed for Claude only, Hub B for Codex only.
+    // An exhausted Codex account on Hub A must not breach a Claude-routed thread.
+    const codex = ProviderDriverKind.make("codex");
+    const piMultiHub = {
+      ...piSnapshot,
+      usageRoutes: [
+        { driver: claude, origin: "http://localhost:8317" },
+        { driver: codex, origin: "http://localhost:8318" },
+      ],
+    } as ServerProvider;
+    const hubA: UsageLimitSourceSnapshot = {
+      ...hub,
+      id: UsageLimitSourceId.make("hub-a"),
+      origin: "http://127.0.0.1:8317",
+      accounts: [
+        {
+          id: "claude.json",
+          driver: claude,
+          usageLimits: {
+            checkedAt,
+            windows: [
+              {
+                id: "five_hour",
+                kind: "session",
+                label: "Claude 5h",
+                usedPercent: 20,
+                resetsAt: "2099-11-04T15:00:00.000Z",
+              },
+            ],
+          },
+        },
+        {
+          id: "codex-exhausted-on-hub-a.json",
+          driver: codex,
+          usageLimits: {
+            checkedAt,
+            windows: [
+              {
+                id: "five_hour",
+                kind: "session",
+                label: "Codex 5h",
+                usedPercent: 99,
+                resetsAt: "2099-11-04T15:00:00.000Z",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const isolatedCommands = await runSweep({
+      candidates: [
+        {
+          ...candidate({
+            providerInstanceId: piId,
+            activeRunId: runId,
+            cap: { conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }] },
+          }),
+          thread: {
+            id: threadId,
+            providerInstanceId: piId,
+            modelSelection: { instanceId: piId, model: "cliproxyapi/claude-opus-4-6" },
+            consumptionCap: {
+              conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }],
+            },
+            consumptionCapHit: null,
+          } as unknown as OrchestrationV2AppThread,
+        },
+      ],
+      models: [],
+      snapshots: new Map([[piId, piMultiHub]]),
+      usageSources: [hubA],
+    });
+    expect(isolatedCommands).toEqual([]);
   });
 });

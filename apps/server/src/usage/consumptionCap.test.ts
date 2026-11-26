@@ -80,6 +80,40 @@ describe("consumption cap", () => {
     expect(evaluation.known).toBe(true);
   });
 
+  it("evaluates every current window of the requested kind on multi-source instances", () => {
+    const expiredFirst = evaluateConsumptionCap(
+      cap(quota(80, "session")),
+      snapshot({
+        windows: windows(claude, [
+          {
+            id: "expired",
+            kind: "session",
+            label: "Old 5h",
+            usedPercent: 10,
+            resetsAt: "2026-11-04T11:00:00.000Z",
+          },
+          {
+            id: "low",
+            kind: "session",
+            label: "Local 5h",
+            usedPercent: 20,
+            resetsAt: "2026-11-04T15:00:00.000Z",
+          },
+          {
+            id: "hub-breach",
+            kind: "session",
+            label: "Hub 5h",
+            usedPercent: 90,
+            resetsAt: "2026-11-04T15:00:00.000Z",
+          },
+        ]),
+      }),
+      now,
+    );
+    expect(expiredFirst.breach?.reason).toBe("Hub 5h usage 90% reached 80% cap.");
+    expect(expiredFirst.known).toBe(true);
+  });
+
   it("adds the models a spend condition lists and ignores the rest", () => {
     const scoped = cap(spend(10, [claudeModel, codexModel]));
     expect(

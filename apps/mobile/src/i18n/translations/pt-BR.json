@@ -1,13 +1,11 @@
 {
-  "4bcfa3b976a421cf": "Chat paralelo",
-  "23be753133ae6950": "Thread",
-  "0001ae5846061bb6": "Thread em {machine}",
   "68f55a32be30741f": "Adiada",
   "83f21685be4a1e26": "Adiada em {machine}",
   "6e67ab167cd02e15": "Concluída",
   "ba5e42212f978e52": "Concluída em {machine}",
   "370aa80e162adbf6": "Ativo",
   "26797d614bb4781b": "Ativa em {machine}",
+  "4bcfa3b976a421cf": "Chat paralelo",
   "eef7f4dacbc3c3f2": "Máquina",
   "422ced5cda40580e": "Buscar o branch base",
   "47e6147265a28164": "Fazer checkout dos arquivos",
@@ -5852,6 +5850,7 @@
   "904cfc367ae339b3": "Baixando {name}",
   "1640648c0bcc005a": "Preparando {name}",
   "d9c427b8eee47ebd": "Sobre {name}",
+  "165a135b316e0054": "Não foi possível abrir a página",
   "a272b8a91501acee": "{name} já adicionado",
   "1a911e3dd1e69be8": "Adicionar",
   "84ca50abac9e84ae": "Não foi possível listar as sessões ACP",
@@ -6117,7 +6116,6 @@
   "957a0e199cb3abf0": "A solicitação de autenticação expirou",
   "9cd6647baae39b79": "Atualize o provedor e inicie o fluxo de autenticação novamente.",
   "34e971a4cd3cfdf3": "Não foi possível continuar a autenticação",
-  "165a135b316e0054": "Não foi possível abrir a página",
   "145be1cadcb811f9": [
     "Este provedor não está mais configurado em ",
     {

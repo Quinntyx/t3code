@@ -9,9 +9,11 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -24,6 +26,7 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 
 const supervisedThreadId = ThreadId.make("thread:supervised");
 const planThreadId = ThreadId.make("thread:plan");
@@ -509,4 +512,20 @@ it.effect("refuses to build a thread-bound tool that outside clients would be of
       "reads_as_caller acts as its calling thread",
     );
   }),
+);
+
+// These act on the caller's own thread without naming it, so no outside client has one to act on.
+it.each(["notify_voice", "t3_submit_output"] as const)(
+  "keeps %s hidden from outside clients",
+  (name) => {
+    const tool = ThreadToolkit.tools[name];
+    const parameters: unknown = tool.parametersSchema;
+    expect(
+      Predicate.hasProperty(parameters, "fields") &&
+        Predicate.hasProperty(parameters.fields, "threadId"),
+    ).toBe(false);
+    expect(Context.getOrUndefined(tool.annotations, McpSchema.EnabledWhen)).toBe(
+      McpInvocationContext.hiddenFromOutsideClients,
+    );
+  },
 );

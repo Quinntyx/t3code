@@ -1,13 +1,11 @@
 {
-  "4bcfa3b976a421cf": "Sidochatt",
-  "23be753133ae6950": "Tråd",
-  "0001ae5846061bb6": "Tråd på {machine}",
   "68f55a32be30741f": "Snoozad",
   "83f21685be4a1e26": "Snoozad på {machine}",
   "6e67ab167cd02e15": "Klar",
   "ba5e42212f978e52": "Klar på {machine}",
   "370aa80e162adbf6": "Aktiv",
   "26797d614bb4781b": "Aktiv på {machine}",
+  "4bcfa3b976a421cf": "Sidochatt",
   "eef7f4dacbc3c3f2": "Dator",
   "422ced5cda40580e": "Hämta basgren",
   "47e6147265a28164": "Checka ut filer",
@@ -5858,6 +5856,7 @@
   "904cfc367ae339b3": "Laddar ned {name}",
   "1640648c0bcc005a": "Förbereder {name}",
   "d9c427b8eee47ebd": "Om {name}",
+  "165a135b316e0054": "Kunde inte öppna sidan",
   "a272b8a91501acee": "{name} har redan lagts till",
   "1a911e3dd1e69be8": "Lägg till",
   "84ca50abac9e84ae": "Kunde inte lista ACP-sessioner",
@@ -6123,7 +6122,6 @@
   "957a0e199cb3abf0": "Autentiseringsbegäran har gått ut",
   "9cd6647baae39b79": "Uppdatera leverantören och starta autentiseringen igen.",
   "34e971a4cd3cfdf3": "Kunde inte fortsätta autentiseringen",
-  "165a135b316e0054": "Kunde inte öppna sidan",
   "145be1cadcb811f9": [
     "Den här leverantören är inte längre konfigurerad på ",
     {

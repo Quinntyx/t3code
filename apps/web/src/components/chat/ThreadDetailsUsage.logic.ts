@@ -12,6 +12,7 @@ import {
   collectProviderUsageLimits,
   displayLimitWindows,
   hubRoutes,
+  isPiHubModelProvider,
   type LimitPoolAmount,
   type LimitPoolWindow,
   resolveInstanceHubRoutes,
@@ -39,10 +40,17 @@ export function resolveThreadDetailsLimits(
   const provider = providers.find((entry) => entry.instanceId === providerInstanceId);
   if (!provider) return null;
   const { driver: quotaDriver, hubs } = resolveInstanceHubRoutes(provider, sources, model);
+  const modelProvider = model?.split(/[/:]/)[0];
+  const piHubModel = provider.driver === "pi" && isPiHubModelProvider(modelProvider);
   if (hubs.length > 0) {
     // An instance routed to a hub spends that hub's pool for the selected model.
     const pool = hubPool(quotaDriver, model, providers, hubs, now);
     if (pool) return pool;
+    // Do not fall back to an unrelated local usageLimits when a hub-routed model's hub is unreadable.
+    if (piHubModel) return null;
+  } else if (piHubModel) {
+    // Offline or unconfigured CLIProxyAPI hub on Pi must not display unrelated local limits.
+    return null;
   }
   const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
   if (
@@ -57,13 +65,15 @@ export function resolveThreadDetailsLimits(
   // a different login or workspace, so prefer a usable entry matching the selected model's driver.
   const ownEntries =
     report?.accounts.filter((entry) => entry.instanceId === provider.instanceId) ?? [];
-  const own =
+  const matchingOwn =
     ownEntries.find((entry) => entry.driver === quotaDriver && limitsNotice(entry.limits) === null)
       ?.limits ??
-    ownEntries.find((entry) => limitsNotice(entry.limits) === null)?.limits ??
-    ownEntries[0]?.limits ??
-    provider.usageLimits;
-  return own ? { kind: "instance", limits: own } : null;
+    ownEntries.find((entry) => entry.driver === quotaDriver)?.limits ??
+    null;
+  if (matchingOwn) return { kind: "instance", limits: matchingOwn };
+  return provider.usageLimits && ownDriver === quotaDriver
+    ? { kind: "instance", limits: provider.usageLimits }
+    : null;
 }
 
 export function nextPoolReset(window: LimitPoolWindow, now: number) {
@@ -101,27 +111,42 @@ function hubPool(
     .flatMap((source) => source.accounts)
     .filter((account) => limitsNotice(account.usageLimits) === null);
   if (readable.length === 0) return null;
-  // A signed-in login joins the pool only as a fresher reading of an account the hub routes to.
-  const signedIn = providers.filter((provider) =>
+  // A signed-in login joins the pool only as a fresher reading of an account the hub routes to;
+  // strip unrelated usageLimits / usageSources on multi-source providers (such as Pi).
+  const matchesHubAccount = (
+    accountDriver: ServerProvider["driver"],
+    workspaceId: string | undefined,
+    email: string | undefined,
+  ) =>
     readable.some((account) => {
-      const email = account.email?.toLowerCase();
-      if (email === undefined) return false;
-      const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
-      if (
-        account.driver === ownDriver &&
-        account.workspaceId === provider.auth.workspaceId &&
-        email === provider.auth.email?.toLowerCase()
-      ) {
-        return true;
-      }
-      return (provider.usageSources ?? []).some(
-        (source) =>
-          account.driver === (source.limits.ownerDriver ?? source.driver) &&
-          account.workspaceId === source.workspaceId &&
-          email === source.email?.toLowerCase(),
+      const accountEmail = account.email?.toLowerCase();
+      return (
+        accountEmail !== undefined &&
+        account.driver === accountDriver &&
+        account.workspaceId === workspaceId &&
+        accountEmail === email?.toLowerCase()
       );
-    }),
-  );
+    });
+  const signedIn: ServerProvider[] = [];
+  for (const provider of providers) {
+    const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
+    const keepOwn =
+      provider.usageLimits !== undefined &&
+      matchesHubAccount(ownDriver, provider.auth.workspaceId, provider.auth.email);
+    const matchingSources = (provider.usageSources ?? []).filter((source) =>
+      matchesHubAccount(
+        source.limits.ownerDriver ?? source.driver,
+        source.workspaceId,
+        source.email,
+      ),
+    );
+    if (!keepOwn && matchingSources.length === 0) continue;
+    signedIn.push({
+      ...provider,
+      usageLimits: keepOwn ? provider.usageLimits : undefined,
+      usageSources: matchingSources,
+    });
+  }
   const presentations = new Map([
     [
       CARD_ENVIRONMENT,

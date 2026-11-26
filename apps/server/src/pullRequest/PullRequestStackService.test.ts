@@ -131,6 +131,11 @@ function summary(
 
 const makeService = Effect.fn("makeStackService")(function* (input: {
   readonly root: string;
+  readonly trackedFolders?: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly path: string;
+  }>;
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly archivedThreads?: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly summaries: ReadonlyArray<PullRequestSummary>;
@@ -230,6 +235,9 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
               title: "app",
               hasCustomTitle: false,
               workspaceRoot: input.root,
+              ...(input.trackedFolders === undefined
+                ? {}
+                : { trackedFolders: input.trackedFolders }),
               repositoryIdentity: null,
               defaultModelSelection: null,
               defaultThreadEnvMode: null,
@@ -712,6 +720,22 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
         assert.deepStrictEqual(tanstackShortSha.mergeExpectedHeads, [
           { number: 3, expectedHeadSha: fullHead },
         ]);
+
+        // Multi-repo projects reject mergeStack BEFORE mutating the forge (layer 1 stays unmerged).
+        const multiRepo = yield* makeService({
+          root,
+          trackedFolders: [{ id: "repo-a", name: "a", path: `${root}/a` }],
+          threads: [],
+          summaries: [
+            summary(1, "a", "main", "open", { headSha: "11111111" }),
+            summary(2, "b", "a", "open", { headSha: "22222222" }),
+          ],
+        });
+        const multiRepoErr = yield* multiRepo.service
+          .mergeStack({ projectId: PROJECT_ID, repository: REPOSITORY, number: 2 })
+          .pipe(Effect.flip);
+        assert.include(multiRepoErr.message, "not supported for multi-repo projects");
+        assert.deepStrictEqual(multiRepo.merges, []);
       }),
     );
 

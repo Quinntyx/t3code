@@ -256,7 +256,8 @@ const NotifyVoiceTool = Tool.make("notify_voice", {
   ],
 })
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const SubmitOutputTool = Tool.make("t3_submit_output", {
   ...commandTool,

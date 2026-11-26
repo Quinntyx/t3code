@@ -12,22 +12,72 @@ import * as ProjectService from "../project/ProjectService.ts";
 type CheckoutThread = Pick<
   OrchestrationV2ThreadShell,
   "id" | "title" | "projectId" | "worktreePath" | "activityRunStatus"
->;
+> & {
+  readonly activeRunId?: OrchestrationV2ThreadShell["activeRunId"];
+  readonly pendingRuntimeRequest?: OrchestrationV2ThreadShell["pendingRuntimeRequest"];
+  readonly deletedAt?: OrchestrationV2ThreadShell["deletedAt"];
+};
 
-/** Threads with an active run whose working directory is one of `checkoutPaths`. */
+/** Threads with active work whose working directory is one of `checkoutPaths`. */
 export function busyThreadsInCheckout<T extends CheckoutThread>(input: {
   readonly checkoutPaths: ReadonlyArray<string>;
   readonly projectIds: ReadonlySet<ProjectId>;
   readonly threads: ReadonlyArray<T>;
+  readonly excludeThreadId?: OrchestrationV2ThreadShell["id"];
+  readonly includePendingRequests?: boolean;
 }): ReadonlyArray<T> {
   return input.threads.filter(
     (thread) =>
-      (thread.activityRunStatus ?? null) !== null &&
+      thread.deletedAt == null &&
+      thread.id !== input.excludeThreadId &&
+      ((thread.activityRunStatus ?? null) !== null ||
+        (input.includePendingRequests === true &&
+          ((thread.activeRunId ?? null) !== null ||
+            (thread.pendingRuntimeRequest ?? null) !== null))) &&
       (thread.worktreePath === null
         ? input.projectIds.has(thread.projectId)
         : input.checkoutPaths.includes(thread.worktreePath)),
   );
 }
+
+/** Resolve all checkout paths and project IDs that share `cwd`'s git repository checkout. */
+export const resolveSharedCheckoutScope = Effect.fn("sharedCheckoutGuard.resolveScope")(function* (
+  cwd: string,
+  options?: {
+    readonly gitWorkflow?: GitWorkflowService.GitWorkflowService["Service"] | undefined;
+    readonly projects?: ReadonlyArray<{ readonly id: ProjectId; readonly workspaceRoot: string }>;
+    readonly fallbackProjectIds?: ReadonlyArray<ProjectId>;
+  },
+) {
+  const root = options?.gitWorkflow
+    ? yield* options.gitWorkflow.repositoryRoot(cwd).pipe(Effect.orElseSucceed(() => null))
+    : null;
+  const checkoutPaths = [...new Set([cwd, ...(root === null ? [] : [root])])];
+  const projects = options?.projects ?? [];
+  const nested =
+    options?.gitWorkflow && root !== null
+      ? yield* Effect.forEach(
+          projects.filter(
+            ({ workspaceRoot }) =>
+              !checkoutPaths.includes(workspaceRoot) && workspaceRoot.startsWith(`${root}/`),
+          ),
+          (project) =>
+            options.gitWorkflow!.repositoryRoot(project.workspaceRoot).pipe(
+              Effect.map((projectRoot) => (projectRoot === root ? [project] : [])),
+              Effect.orElseSucceed(() => []),
+            ),
+          { concurrency: "unbounded" },
+        )
+      : [];
+  const projectIds = new Set<ProjectId>([
+    ...(options?.fallbackProjectIds ?? []),
+    ...projects
+      .filter(({ workspaceRoot }) => checkoutPaths.includes(workspaceRoot))
+      .map(({ id }) => id),
+    ...nested.flat().map(({ id }) => id),
+  ]);
+  return { checkoutPaths, projectIds } as const;
+});
 
 function describeBusyCheckout(titles: ReadonlyArray<string>): string {
   const quoted = titles.map((title) => `'${title}'`);
@@ -46,35 +96,14 @@ export const assertCheckoutIdle = Effect.fn("sharedCheckoutGuard.assertCheckoutI
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projectService = yield* ProjectService.ProjectService;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
-  // `git checkout` from a subdirectory moves the whole checkout; records may hold either spelling.
-  const root = yield* gitWorkflow.repositoryRoot(cwd).pipe(Effect.orElseSucceed(() => null));
-  const checkoutPaths = [...new Set([cwd, ...(root === null ? [] : [root])])];
   const projects = yield* projectService.snapshot.pipe(
     Effect.map((snapshot) => snapshot.projects),
     Effect.orElseSucceed(() => []),
   );
-  // A project rooted inside the checkout shares it, as in a monorepo package, unless it is its
-  // own repository nested there.
-  const nested = yield* Effect.forEach(
-    projects.filter(
-      ({ workspaceRoot }) =>
-        root !== null &&
-        !checkoutPaths.includes(workspaceRoot) &&
-        workspaceRoot.startsWith(`${root}/`),
-    ),
-    (project) =>
-      gitWorkflow.repositoryRoot(project.workspaceRoot).pipe(
-        Effect.map((projectRoot) => (projectRoot === root ? [project] : [])),
-        Effect.orElseSucceed(() => []),
-      ),
-    { concurrency: "unbounded" },
-  );
-  const projectIds = new Set(
-    [
-      ...projects.filter(({ workspaceRoot }) => checkoutPaths.includes(workspaceRoot)),
-      ...nested.flat(),
-    ].map(({ id }) => id),
-  );
+  const { checkoutPaths, projectIds } = yield* resolveSharedCheckoutScope(cwd, {
+    gitWorkflow,
+    projects,
+  });
   // Archiving does not stop a run, so archived threads can still be working. Each lookup fails
   // open on its own, so one failure keeps what the others found.
   const snapshots = yield* Effect.forEach(

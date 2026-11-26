@@ -111,19 +111,21 @@ export function evaluateConsumptionCap(
         : [...new Set((condition.models ?? []).map((entry) => entry.providerInstanceId as string))];
     let answered = false;
     for (const instanceId of instanceIds) {
-      const window = (snapshot.windowsByInstance.get(instanceId) ?? []).find(
+      const matching = (snapshot.windowsByInstance.get(instanceId) ?? []).filter(
         (candidate) => candidate.kind === condition.windowKind,
       );
-      if (window === undefined) continue;
+      if (matching.length === 0) continue;
       answered = true;
-      if (!windowIsCurrent(window, nowMs)) continue;
-      if (window.usedPercent < condition.atPercent) continue;
-      return {
-        known: true,
-        breach: {
-          reason: `${window.label} usage ${Math.round(window.usedPercent)}% reached ${condition.atPercent}% cap.`,
-        },
-      };
+      for (const window of matching) {
+        if (!windowIsCurrent(window, nowMs)) continue;
+        if (window.usedPercent < condition.atPercent) continue;
+        return {
+          known: true,
+          breach: {
+            reason: `${window.label} usage ${Math.round(window.usedPercent)}% reached ${condition.atPercent}% cap.`,
+          },
+        };
+      }
     }
     if (!answered) known = false;
   }

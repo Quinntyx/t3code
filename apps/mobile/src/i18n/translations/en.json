@@ -1,13 +1,11 @@
 {
-  "4bcfa3b976a421cf": "Side chat",
-  "23be753133ae6950": "Thread",
-  "0001ae5846061bb6": "Thread on {machine}",
   "68f55a32be30741f": "Snoozed",
   "83f21685be4a1e26": "Snoozed on {machine}",
   "6e67ab167cd02e15": "Settled",
   "ba5e42212f978e52": "Settled on {machine}",
   "370aa80e162adbf6": "Active",
   "26797d614bb4781b": "Active on {machine}",
+  "4bcfa3b976a421cf": "Side chat",
   "eef7f4dacbc3c3f2": "Machine",
   "422ced5cda40580e": "Fetch base branch",
   "47e6147265a28164": "Check out files",
@@ -5860,6 +5858,7 @@
   "904cfc367ae339b3": "Downloading {name}",
   "1640648c0bcc005a": "Preparing {name}",
   "d9c427b8eee47ebd": "About {name}",
+  "165a135b316e0054": "Could not open the page",
   "a272b8a91501acee": "{name} already added",
   "1a911e3dd1e69be8": "Add",
   "84ca50abac9e84ae": "Could not list ACP sessions",
@@ -6125,7 +6124,6 @@
   "957a0e199cb3abf0": "Authentication request expired",
   "9cd6647baae39b79": "Refresh the provider and start the authentication flow again.",
   "34e971a4cd3cfdf3": "Could not continue authentication",
-  "165a135b316e0054": "Could not open the page",
   "145be1cadcb811f9": [
     "This provider is no longer configured on ",
     {

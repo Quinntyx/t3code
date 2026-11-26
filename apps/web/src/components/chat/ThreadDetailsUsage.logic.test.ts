@@ -226,5 +226,56 @@ describe("resolveThreadDetailsLimits", () => {
     expect(
       resolveThreadDetailsLimits(piId, "openai-codex/gpt-5.4", [piProvider], sources, now),
     ).toEqual({ kind: "instance", limits: chatgptLimits });
+    // Unrelated direct model or offline CLIProxyAPI hub returns null, never leaking OpenCode Go limits.
+    expect(
+      resolveThreadDetailsLimits(piId, "anthropic/claude-opus-4-6", [piProvider], sources, now),
+    ).toBeNull();
+    expect(
+      resolveThreadDetailsLimits(piId, "cliproxyapi/claude-opus-4-6", [piProvider], [], now),
+    ).toBeNull();
+    // When Pi's ChatGPT usageSource matches a Codex hub account, hubPool strips unrelated OpenCode Go limits.
+    const codexPi: ServerProvider = {
+      ...piProvider,
+      usageRoutes: [{ origin: "http://localhost:8317", driver: codex }],
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: codex,
+          email: "same@example.com",
+          limits: chatgptLimits,
+        },
+      ],
+    };
+    const codexHub = [
+      {
+        ...hub(
+          "Hub",
+          [{ id: "c.json", driver: codex, models: ["gpt-5.4"], limits: limitsAt(50) }],
+          "http://127.0.0.1:8317",
+        ),
+        accounts: [
+          {
+            id: "c.json",
+            driver: codex,
+            email: "same@example.com",
+            models: ["gpt-5.4"],
+            usageLimits: limitsAt(50),
+          },
+        ],
+      },
+    ];
+    const codexPool = resolveThreadDetailsLimits(
+      piId,
+      "cliproxyapi/gpt-5.4",
+      [codexPi],
+      codexHub,
+      now,
+    );
+    expect(codexPool?.kind).toBe("pool");
+    if (codexPool?.kind === "pool") {
+      expect(codexPool.windows).toHaveLength(1);
+      expect(codexPool.windows[0]?.remainingPercent).toBe(60);
+    }
   });
 });

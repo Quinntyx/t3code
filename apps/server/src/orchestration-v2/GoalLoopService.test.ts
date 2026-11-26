@@ -395,10 +395,45 @@ it.effect.each(
           }),
         },
       ],
+      [
+        "a consumption cap hit",
+        {
+          thread: appThread({
+            consumptionCapHit: {
+              at: "2026-11-23T00:00:00.000Z",
+              reason: "Session usage 90% reached 80% cap.",
+            },
+          }),
+        },
+      ],
       ["an active async subagent", { turnItems: [{ type: "subagent", status: "running" }] }],
       [
         "pending provider background tasks",
-        { providerThreads: [{ pendingBackgroundTasks: [{ id: "bg-1" }] }] },
+        {
+          providerThreads: [
+            {
+              pendingBackgroundTasks: [
+                { taskId: "bg-1", kind: "background_task", description: "build" },
+              ],
+            },
+          ],
+        },
+      ],
+      [
+        "an awaited PR watch",
+        {
+          thread: appThread({
+            pullRequests: [
+              {
+                host: "github.com",
+                repository: "org/repo",
+                number: 1,
+                url: "https://github.com/org/repo/pull/1",
+                watch: { until: "merged" },
+              },
+            ] as unknown as OrchestrationV2AppThread["pullRequests"],
+          }),
+        },
       ],
       ["no runs", { runs: [] }],
     ] as const
@@ -430,6 +465,25 @@ it.effect("continues past a link_request once the user posts a newer message", (
 
     assert.deepEqual(
       dispatched.map((command) => command.type),
+      ["delegated_task.request"],
+    );
+  }),
+);
+
+it.effect("ignores unrelated metadata updates on interrupted threads and unawaited commands", () =>
+  Effect.gen(function* () {
+    const afterInterrupt = yield* dispatchedFor({
+      events: [goalUpdated("active")],
+      runs: [run("run-1", "interrupted")],
+    });
+    assert.deepEqual(afterInterrupt, []);
+
+    const withUnawaitedCommand = yield* dispatchedFor({
+      events: [completedRun("run-1")],
+      turnItems: [{ type: "command_execution", status: "running" }],
+    });
+    assert.deepEqual(
+      withUnawaitedCommand.map((command) => command.type),
       ["delegated_task.request"],
     );
   }),

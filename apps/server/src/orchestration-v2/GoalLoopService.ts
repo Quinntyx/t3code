@@ -1,16 +1,20 @@
 import {
   CommandId,
-  isOrchestrationV2WorkActive,
   MessageId,
   goalReviewPrompt,
   goalTurnPrompt,
   type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
   type OrchestrationV2RunStatus,
   type OrchestrationV2TurnItem,
   type ThreadId,
 } from "@t3tools/contracts";
+import {
+  backgroundWorkHoldsCompletion,
+  derivePendingBackgroundWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { overloadedRun, stalledRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,29 +44,27 @@ const GOAL_TURN_ITEM_TYPES = [
   "dynamic_tool",
 ] as const;
 
-function hasPendingAsyncWork(records: {
-  readonly thread: Pick<OrchestrationV2AppThread, "threadWatches" | "awaitedScheduledTaskIds">;
-  readonly providerThreads: ReadonlyArray<
-    Pick<OrchestrationV2ProviderThread, "pendingBackgroundTasks">
+function hasHoldingBackgroundWork(records: {
+  readonly thread: Pick<
+    OrchestrationV2AppThread,
+    "activeProviderThreadId" | "pullRequests" | "threadWatches" | "awaitedScheduledTaskIds"
   >;
+  readonly runs: ReadonlyArray<OrchestrationV2Run>;
+  readonly providerThreads: ReadonlyArray<OrchestrationV2ProviderThread>;
   readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
 }): boolean {
-  if ((records.thread.threadWatches?.length ?? 0) > 0) return true;
-  if ((records.thread.awaitedScheduledTaskIds?.length ?? 0) > 0) return true;
-  if (
-    records.providerThreads.some(
-      (providerThread) => (providerThread.pendingBackgroundTasks?.length ?? 0) > 0,
-    )
-  ) {
-    return true;
-  }
-  return records.turnItems.some(
-    (item) =>
-      (item.type === "subagent" ||
-        item.type === "command_execution" ||
-        item.type === "dynamic_tool") &&
-      isOrchestrationV2WorkActive(item.status),
-  );
+  const latestRun = records.runs.at(-1) ?? null;
+  const pending = derivePendingBackgroundWork({
+    latestRun,
+    providerThreads: records.providerThreads,
+    turnItems: records.turnItems,
+    activeProviderThreadId: records.thread.activeProviderThreadId,
+    runs: records.runs,
+    pullRequests: records.thread.pullRequests,
+    awaitedScheduledTaskIds: records.thread.awaitedScheduledTaskIds,
+    threadWatches: records.thread.threadWatches,
+  });
+  return backgroundWorkHoldsCompletion(pending);
 }
 
 function latestUserAuthoredMessageTimestamp(
@@ -161,7 +163,7 @@ export const make = Effect.gen(function* () {
   });
 
   const continueGoal = Effect.fn("GoalLoopService.continueGoal")(
-    function* (threadId: ThreadId) {
+    function* (threadId: ThreadId, options?: { readonly requireCompletedLatestRun?: boolean }) {
       const records = yield* projections.getThreadRecords(
         threadId,
         ["runs", "runtimeRequests", "turnItems", "messages", "providerThreads"],
@@ -174,6 +176,7 @@ export const make = Effect.gen(function* () {
       if (
         records.thread.archivedAt !== null ||
         records.thread.deletedAt !== null ||
+        records.thread.consumptionCapHit != null ||
         // Settling or snoozing is the user saying the thread should rest.
         records.thread.settledOverride === "settled" ||
         (records.thread.snoozedUntil != null &&
@@ -184,13 +187,14 @@ export const make = Effect.gen(function* () {
         // its retry, and after a Stop the user asked for rest.
         overloadedRun(records.runs, records.turnItems) !== null ||
         records.turnItems.some((item) => isWaitingUserInputCard(item, latestUserMessageAt)) ||
-        hasPendingAsyncWork(records) ||
+        hasHoldingBackgroundWork(records) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
       }
       const latest = records.runs.at(-1);
       if (latest === undefined) return;
+      if (options?.requireCompletedLatestRun === true && latest.status !== "completed") return;
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         // One continuation per finished turn, even across duplicate events.
@@ -204,7 +208,7 @@ export const make = Effect.gen(function* () {
         dispatchMode: { type: "queue_after_active" },
       });
     },
-    (effect, threadId) =>
+    (effect, threadId, _options?: { readonly requireCompletedLatestRun?: boolean }) =>
       effect.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("goal continuation skipped", { threadId, cause }),
@@ -230,6 +234,7 @@ export const make = Effect.gen(function* () {
       if (
         records.thread.archivedAt !== null ||
         records.thread.deletedAt !== null ||
+        records.thread.consumptionCapHit != null ||
         records.thread.settledOverride === "settled" ||
         (records.thread.snoozedUntil != null &&
           DateTime.toEpochMillis(records.thread.snoozedUntil) > now) ||
@@ -238,7 +243,7 @@ export const make = Effect.gen(function* () {
         // its retry, and after a Stop the user asked for rest.
         overloadedRun(records.runs, records.turnItems) !== null ||
         records.turnItems.some((item) => isWaitingUserInputCard(item, latestUserMessageAt)) ||
-        hasPendingAsyncWork(records) ||
+        hasHoldingBackgroundWork(records) ||
         records.runs.some((run) => LIVE_RUN_STATUSES.has(run.status))
       ) {
         return;
@@ -271,6 +276,7 @@ export const make = Effect.gen(function* () {
   );
 
   const start = Effect.fn("GoalLoopService.start")(function* () {
+    const lastGoalStatus = new Map<ThreadId, string | null>();
     return yield* forkParkedFiber(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) => {
         if (event.type === "run.updated") {
@@ -316,9 +322,17 @@ export const make = Effect.gen(function* () {
             ),
           );
         }
-        // A goal set or resumed on an idle thread starts its first turn here.
-        if (event.type === "thread.metadata-updated" && event.payload.goal?.status === "active") {
-          return continueGoal(event.threadId);
+        // A goal set or resumed on an idle thread starts its first turn here, while unrelated
+        // metadata edits (pinning, renaming, cap/limit updates) leave stopped/active threads alone.
+        if (event.type === "thread.metadata-updated") {
+          const previous = lastGoalStatus.get(event.threadId);
+          const next = event.payload.goal?.status ?? null;
+          lastGoalStatus.set(event.threadId, next);
+          if (next === "active" && previous !== "active") {
+            return continueGoal(event.threadId, {
+              requireCompletedLatestRun: previous !== "paused",
+            });
+          }
         }
         return Effect.void;
       }),

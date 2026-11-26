@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   matchComposerEnvironmentItems,
-  matchComposerThreadItems,
   matchComposerThreadTriggerItems,
   type ComposerThreadTriggerCandidate,
 } from "./composerThreadItems.ts";
@@ -33,83 +32,6 @@ function shell(
   };
   return Object.assign(base, overrides);
 }
-
-it("ranks thread mentions like the palette and leaves out subagent threads", () => {
-  const items = matchComposerThreadItems({
-    shells: [
-      shell("newer-mid-word", "Remodel the settings page", {
-        updatedAt: "2026-10-20T00:00:00.000Z",
-      }),
-      shell("word", "Fix model picker"),
-      shell("subagent", "Model review", {
-        lineage: {
-          rootThreadId: ThreadId.make("word"),
-          parentThreadId: ThreadId.make("word"),
-          relationshipToParent: "subagent",
-        },
-      }),
-      shell("other-environment", "Model docs", { environmentId: EnvironmentId.make("env-other") }),
-    ],
-    environmentId,
-    linkedEnvironments: new Map(),
-    excludeThreadId: null,
-    query: "model",
-    now: Date.parse("2026-10-23T00:00:00.000Z"),
-  });
-  expect(items.map((item) => item.thread.threadId)).toEqual(["word", "newer-mid-word"]);
-});
-
-it("offers the composer thread's own used side chats, but not other threads' side chats", () => {
-  const sideChatOf = (parent: string) => ({
-    rootThreadId: ThreadId.make(parent),
-    parentThreadId: ThreadId.make(parent),
-    relationshipToParent: "fork" as const,
-    sideChat: true,
-  });
-  const latestUserMessageAt = "2026-10-22T00:00:00.000Z";
-  const items = matchComposerThreadItems({
-    shells: [
-      shell("mine", "Why is the build slow?", { lineage: sideChatOf("main"), latestUserMessageAt }),
-      shell("unused", "Slow side chat", { lineage: sideChatOf("main") }),
-      shell("theirs", "Why is the test slow?", {
-        lineage: sideChatOf("other"),
-        latestUserMessageAt,
-      }),
-    ],
-    environmentId,
-    linkedEnvironments: new Map(),
-    excludeThreadId: ThreadId.make("main"),
-    query: "slow",
-    now: Date.parse("2026-10-23T00:00:00.000Z"),
-  });
-  expect(items.map(({ thread, description }) => ({ id: thread.threadId, description }))).toEqual([
-    { id: "mine", description: "Side chat" },
-  ]);
-});
-
-it("also offers threads on linked machines, naming the machine, but no other machine's", () => {
-  const vps = EnvironmentId.make("env-vps");
-  const items = matchComposerThreadItems({
-    shells: [
-      shell("here", "Deploy script"),
-      shell("there", "Deploy script", { environmentId: vps }),
-      shell("unlinked", "Deploy notes", { environmentId: EnvironmentId.make("env-unlinked") }),
-    ],
-    environmentId,
-    linkedEnvironments: new Map([[vps, "Hetzner VPS"]]),
-    excludeThreadId: null,
-    query: "deploy",
-    now: Date.parse("2026-10-23T00:00:00.000Z"),
-  });
-  expect(items.map(({ thread, label, description }) => ({ thread, label, description }))).toEqual([
-    { thread: { environmentId, threadId: "here" }, label: "Deploy script", description: "Thread" },
-    {
-      thread: { environmentId: vps, threadId: "there" },
-      label: "Deploy script",
-      description: "Thread on Hetzner VPS",
-    },
-  ]);
-});
 
 describe("matchComposerThreadTriggerItems", () => {
   const now = Date.parse("2026-10-23T00:00:00.000Z");

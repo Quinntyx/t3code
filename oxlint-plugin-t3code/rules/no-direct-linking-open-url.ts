@@ -1,4 +1,4 @@
-import { defineRule } from "@oxlint/plugins";
+import { defineRule, type ESTree } from "@oxlint/plugins";
 import * as Option from "effect/Option";
 
 import { getPropertyName, unwrapExpression } from "../utils.ts";
@@ -6,19 +6,24 @@ import { getPropertyName, unwrapExpression } from "../utils.ts";
 const MESSAGE =
   "Open external URLs with tryOpenExternalUrl from apps/mobile/src/lib/openExternalUrl.ts; a direct Linking.openURL rejects and leaves the failure unreported.";
 
-const isLinking = (node: unknown): boolean => {
-  const expression = unwrapExpression(node);
-  return (
-    Option.isSome(expression) &&
-    expression.value.type === "Identifier" &&
-    expression.value.name === "Linking"
-  );
-};
+const LINKING_MODULES = new Set(["react-native", "expo-linking"]);
 
-const isOpenUrl = (node: unknown): boolean => {
-  const name = getPropertyName(node);
-  return Option.isSome(name) && name.value === "openURL";
-};
+const importedName = (specifier: ESTree.ImportSpecifier): Option.Option<string> =>
+  specifier.imported.type === "Identifier"
+    ? Option.some(specifier.imported.name)
+    : typeof specifier.imported.value === "string"
+      ? Option.some(specifier.imported.value)
+      : Option.none();
+
+const identifierName = (node: unknown): Option.Option<string> =>
+  Option.flatMap(unwrapExpression(node), (expression) => {
+    if (expression.type === "Identifier") return Option.some(expression.name);
+    if (expression.type === "AssignmentPattern") return identifierName(expression.left);
+    return Option.none();
+  });
+
+const isOpenUrlProperty = (node: unknown): boolean =>
+  Option.getOrUndefined(getPropertyName(node)) === "openURL";
 
 export default defineRule({
   meta: {
@@ -29,22 +34,74 @@ export default defineRule({
     },
   },
   create(context) {
+    // Names this file bound to the Linking API or to an openURL function, however imported.
+    const linkingNames = new Set<string>();
+    const openUrlNames = new Set<string>();
+
+    const namesLinking = (node: unknown): boolean => {
+      const expression = unwrapExpression(node);
+      return (
+        Option.isSome(expression) &&
+        expression.value.type === "Identifier" &&
+        (expression.value.name === "Linking" || linkingNames.has(expression.value.name))
+      );
+    };
+
+    const namesOpenUrl = (node: unknown): boolean => {
+      const expression = unwrapExpression(node);
+      return (
+        Option.isSome(expression) &&
+        expression.value.type === "Identifier" &&
+        openUrlNames.has(expression.value.name)
+      );
+    };
+
     return {
-      CallExpression(node) {
-        if (node.callee.type !== "MemberExpression") return;
-        if (!isLinking(node.callee.object) || !isOpenUrl(node.callee.property)) return;
-        context.report({ node: node.callee, message: MESSAGE });
-      },
       ImportDeclaration(node) {
-        if (node.source.value !== "react-native") return;
+        const source = node.source.value;
+        if (typeof source !== "string" || !LINKING_MODULES.has(source)) return;
         for (const specifier of node.specifiers) {
-          if (specifier.type !== "ImportSpecifier") continue;
-          const imported =
-            specifier.imported.type === "Identifier"
-              ? specifier.imported.name
-              : specifier.imported.value;
-          if (imported === "openURL") context.report({ node: specifier, message: MESSAGE });
+          // expo-linking exports the Linking API itself, as its namespace and default export.
+          if (specifier.type === "ImportNamespaceSpecifier") {
+            if (source === "expo-linking") linkingNames.add(specifier.local.name);
+            continue;
+          }
+          if (specifier.type === "ImportSpecifier") {
+            const imported = importedName(specifier);
+            if (Option.isNone(imported)) continue;
+            if (imported.value === "openURL") {
+              openUrlNames.add(specifier.local.name);
+              context.report({ node: specifier, message: MESSAGE });
+            } else if (imported.value === "Linking") {
+              linkingNames.add(specifier.local.name);
+            }
+            continue;
+          }
+          if (source === "expo-linking") linkingNames.add(specifier.local.name);
         }
+      },
+      VariableDeclarator(node) {
+        const binding = unwrapExpression(node.id);
+        if (Option.isNone(binding) || binding.value.type !== "ObjectPattern") return;
+        if (!namesLinking(node.init)) return;
+        for (const property of binding.value.properties) {
+          if (property.type !== "Property" || !isOpenUrlProperty(property.key)) continue;
+          const bound = identifierName(property.value);
+          if (Option.isSome(bound)) openUrlNames.add(bound.value);
+          context.report({ node: property, message: MESSAGE });
+        }
+      },
+      CallExpression(node) {
+        const callee = unwrapExpression(node.callee);
+        if (Option.isNone(callee)) return;
+        if (namesOpenUrl(callee.value)) {
+          context.report({ node: callee.value, message: MESSAGE });
+          return;
+        }
+        const expression = callee.value;
+        if (expression.type !== "MemberExpression") return;
+        if (!namesLinking(expression.object) || !isOpenUrlProperty(expression.property)) return;
+        context.report({ node: expression, message: MESSAGE });
       },
     };
   },

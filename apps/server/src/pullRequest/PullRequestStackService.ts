@@ -26,9 +26,10 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import { busyThreadsInCheckout } from "../git/sharedCheckoutGuard.ts";
+import { busyThreadsInCheckout, resolveSharedCheckoutScope } from "../git/sharedCheckoutGuard.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -88,7 +89,11 @@ export const mergeNativeStack = Effect.fn("PullRequestStackService.mergeNativeSt
       ? preloadedStack
       : yield* pullRequests.stack(ref, { bypassCache: true });
   const end = nativeStack?.layers.findIndex((layer) => layer.number === input.number) ?? -1;
-  if (nativeStack === null || end === -1) {
+  if (
+    nativeStack === null ||
+    end === -1 ||
+    (input.requireMultiLayer === true && nativeStack.layers.length <= 1)
+  ) {
     return yield* new PullRequestOperationError({
       operation: "mergeStack",
       detail: `PR #${input.number} is not in a stack this host can merge. Merge it without stack.`,
@@ -245,6 +250,9 @@ export const make = Effect.gen(function* () {
   const gitWorkflow = Option.getOrUndefined(
     yield* Effect.serviceOption(GitWorkflowService.GitWorkflowService),
   );
+  const projectService = Option.getOrUndefined(
+    yield* Effect.serviceOption(ProjectService.ProjectService),
+  );
   const random = yield* SecureRandom.SecureRandom;
   const reports = new Map<string, Deferred.Deferred<StackMergeReport>>();
 
@@ -255,19 +263,23 @@ export const make = Effect.gen(function* () {
         Effect.map((snapshot) => snapshot.threads.filter((thread) => thread.deletedAt === null)),
       );
 
-  const workspaceRoot = (projectId: ProjectId) =>
+  const resolveProjectRoot = (projectId: ProjectId) =>
     projectStore
       .getShell(projectId)
       .pipe(
-        Effect.map(
-          Option.flatMap((project) =>
-            (project.trackedFolders?.length ?? 0) > 0
-              ? Option.none()
-              : Option.some(project.workspaceRoot),
-          ),
+        Effect.map((found) =>
+          Option.isNone(found)
+            ? ({ kind: "missing" } as const)
+            : (found.value.trackedFolders?.length ?? 0) > 0
+              ? ({ kind: "multi_repo" } as const)
+              : ({ kind: "repo", root: found.value.workspaceRoot } as const),
         ),
-        Effect.map(Option.getOrNull),
       );
+
+  const workspaceRoot = (projectId: ProjectId) =>
+    resolveProjectRoot(projectId).pipe(
+      Effect.map((resolved) => (resolved.kind === "repo" ? resolved.root : null)),
+    );
 
   const tellAgent = Effect.fn("PullRequestStackService.tellAgent")(function* (
     thread: OrchestrationV2ThreadShell,
@@ -341,38 +353,37 @@ export const make = Effect.gen(function* () {
             }),
           ).pipe(Effect.as({ result: result("agent-asked", { reason }), headSha: null }));
 
-    const repoRoot = gitWorkflow
-      ? yield* gitWorkflow.repositoryRoot(cwd).pipe(Effect.orElseSucceed(() => null))
-      : null;
-    const checkoutPaths = [...new Set([cwd, ...(repoRoot === null ? [] : [repoRoot])])];
+    const projects = projectService
+      ? yield* projectService.snapshot.pipe(
+          Effect.map((snapshot) => snapshot.projects),
+          Effect.orElseSucceed(() => []),
+        )
+      : [];
+    const { checkoutPaths, projectIds } = yield* resolveSharedCheckoutScope(cwd, {
+      gitWorkflow,
+      projects,
+      fallbackProjectIds: cwd === plan.root ? [thread.projectId] : [],
+    });
     const checkoutSnapshots = yield* Effect.forEach(
       [
-        projections.getShellSnapshot({ projectId: thread.projectId }),
+        ...[...projectIds].map((projectId) => projections.getShellSnapshot({ projectId })),
         ...checkoutPaths.map((worktreePath) => projections.getShellSnapshot({ worktreePath })),
       ],
       (snapshot) =>
         snapshot.pipe(Effect.orElseSucceed(() => ({ threads: [], archivedThreads: [] }))),
       { concurrency: "unbounded" },
     );
-    const otherThreads = checkoutSnapshots
-      .flatMap((snapshot) => [...snapshot.threads, ...snapshot.archivedThreads])
-      .filter((candidate) => candidate.deletedAt === null && candidate.id !== thread.id);
-    const sameCheckoutProjectIds = new Set(
-      checkoutPaths.includes(plan.root) ? [thread.projectId] : [],
-    );
     const sharedCheckoutBusy =
       busyThreadsInCheckout({
         checkoutPaths,
-        projectIds: sameCheckoutProjectIds,
-        threads: otherThreads,
-      }).length > 0 ||
-      otherThreads.some(
-        (candidate) =>
-          (candidate.worktreePath === null
-            ? sameCheckoutProjectIds.has(candidate.projectId)
-            : checkoutPaths.includes(candidate.worktreePath)) &&
-          (candidate.activeRunId !== null || candidate.pendingRuntimeRequest !== null),
-      );
+        projectIds,
+        threads: checkoutSnapshots.flatMap((snapshot) => [
+          ...snapshot.threads,
+          ...snapshot.archivedThreads,
+        ]),
+        excludeThreadId: thread.id,
+        includePendingRequests: true,
+      }).length > 0;
     const status = yield* git.statusDetailsLocal(cwd);
     const blocker = restackBlocker({
       thread,
@@ -614,15 +625,22 @@ export const make = Effect.gen(function* () {
     const threads = yield* projectThreads(parent.projectId).pipe(
       Effect.mapError(failure("The project's threads could not be read.")),
     );
-    const root = yield* workspaceRoot(parent.projectId).pipe(
+    const projectRoot = yield* resolveProjectRoot(parent.projectId).pipe(
       Effect.mapError(failure("The project could not be read.")),
     );
-    if (root === null) {
+    if (projectRoot.kind === "multi_repo") {
+      return yield* new GitRestackError({
+        threadId: input.threadId,
+        detail: "Restacking stacked branches is not supported for multi-repo projects.",
+      });
+    }
+    if (projectRoot.kind === "missing") {
       return yield* new GitRestackError({
         threadId: input.threadId,
         detail: "The project was not found.",
       });
     }
+    const root = projectRoot.root;
     const children = threads.filter(
       (thread) =>
         thread.id !== parent.id &&
@@ -684,21 +702,18 @@ export const make = Effect.gen(function* () {
         // Native-stack host without a separate stack action (such as TanStack Source): merging
         // the target PR directly lands every unmerged layer below it on its own.
         const targetIndex = nativeStack.layers.findIndex((layer) => layer.number === target.number);
-        const mergedLayers =
-          targetIndex < 0
-            ? [target.number]
-            : nativeStack.layers
-                .slice(0, targetIndex + 1)
-                .filter((layer) => layer.state !== "merged")
-                .map((layer) => layer.number);
         if (
-          input.requireMultiLayer === true &&
-          (nativeStack.layers.length <= 1 || mergedLayers.length <= 1)
+          targetIndex < 0 ||
+          (input.requireMultiLayer === true && nativeStack.layers.length <= 1)
         ) {
           return yield* stop(
             `PR #${target.number} is not in a stack this host can merge. Merge it without stack.`,
           );
         }
+        const mergedLayers = nativeStack.layers
+          .slice(0, targetIndex + 1)
+          .filter((layer) => layer.state !== "merged")
+          .map((layer) => layer.number);
         const resolvedExpectedHeadSha =
           input.expectedHeadSha === undefined
             ? undefined
@@ -732,9 +747,13 @@ export const make = Effect.gen(function* () {
     const threads = yield* projectThreads(target.projectId).pipe(
       Effect.mapError((cause) => stop("The project's threads could not be read.", cause)),
     );
-    const root = yield* workspaceRoot(target.projectId).pipe(
+    const projectRoot = yield* resolveProjectRoot(target.projectId).pipe(
       Effect.mapError((cause) => stop("The project could not be read.", cause)),
     );
+    if (projectRoot.kind === "multi_repo") {
+      return yield* stop("Stack merge is not supported for multi-repo projects.");
+    }
+    const root = projectRoot.kind === "repo" ? projectRoot.root : null;
     const chain: PullRequestSummary[] = [target];
     while (true) {
       const below = chain[0]!;

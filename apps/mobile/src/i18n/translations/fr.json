@@ -1,13 +1,11 @@
 {
-  "4bcfa3b976a421cf": "Discussion annexe",
-  "23be753133ae6950": "Fil",
-  "0001ae5846061bb6": "Fil sur {machine}",
   "68f55a32be30741f": "Reporté",
   "83f21685be4a1e26": "Reporté sur {machine}",
   "6e67ab167cd02e15": "Clos",
   "ba5e42212f978e52": "Clôturé sur {machine}",
   "370aa80e162adbf6": "Actif",
   "26797d614bb4781b": "Actif sur {machine}",
+  "4bcfa3b976a421cf": "Discussion annexe",
   "eef7f4dacbc3c3f2": "Machine",
   "422ced5cda40580e": "Récupérer la branche de base",
   "47e6147265a28164": "Extraire les fichiers",
@@ -5852,6 +5850,7 @@
   "904cfc367ae339b3": "Téléchargement de {name}",
   "1640648c0bcc005a": "Préparation de {name}",
   "d9c427b8eee47ebd": "À propos de {name}",
+  "165a135b316e0054": "Impossible d’ouvrir la page",
   "a272b8a91501acee": "{name} déjà ajouté",
   "1a911e3dd1e69be8": "Ajouter",
   "84ca50abac9e84ae": "Impossible de lister les sessions ACP",
@@ -6117,7 +6116,6 @@
   "957a0e199cb3abf0": "La demande d’authentification a expiré",
   "9cd6647baae39b79": "Actualisez le fournisseur et relancez l’authentification.",
   "34e971a4cd3cfdf3": "Impossible de continuer l’authentification",
-  "165a135b316e0054": "Impossible d’ouvrir la page",
   "145be1cadcb811f9": [
     "Ce fournisseur n’est plus configuré sur ",
     {

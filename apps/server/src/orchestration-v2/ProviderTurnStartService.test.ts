@@ -2582,6 +2582,34 @@ effectIt.effect.each(
     }),
 );
 
+effectIt.effect("appends outputSchema instructions on T3-managed /goal turns", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "/goal all tests pass",
+      goalDriver: "opencode",
+      nativeGoals: false,
+      sideChat: { contextRun: "failed", switchedProvider: true, unsentResume: false },
+    });
+    const projection = harness.projection();
+    harness.setProjection({
+      ...projection,
+      runs: projection.runs.map((run) => ({
+        ...run,
+        outputSchema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+        },
+      })),
+    });
+    harness.tryHandlePromptCommand.mockReturnValue(Effect.succeed(false));
+    yield* harness.start;
+    const sentText = harness.startTurn.mock.calls[0]?.[0].message.text ?? "";
+    expect(sentText).toContain(goalTurnPrompt("all tests pass"));
+    expect(sentText).toContain('"verdict"');
+  }),
+);
+
 effectIt.effect("projects composer context records on T3-managed /goal turns", () =>
   Effect.gen(function* () {
     const text = "/goal ship [app.ts](t3-context://v1/mention/ctx-mention)";

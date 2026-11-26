@@ -1,13 +1,11 @@
 {
-  "4bcfa3b976a421cf": "Chat lateral",
-  "23be753133ae6950": "Hilo",
-  "0001ae5846061bb6": "Hilo en {machine}",
   "68f55a32be30741f": "Pospuesto",
   "83f21685be4a1e26": "Pospuesto en {machine}",
   "6e67ab167cd02e15": "Resuelto",
   "ba5e42212f978e52": "Resuelto en {machine}",
   "370aa80e162adbf6": "Activo",
   "26797d614bb4781b": "Activo en {machine}",
+  "4bcfa3b976a421cf": "Chat lateral",
   "eef7f4dacbc3c3f2": "Máquina",
   "422ced5cda40580e": "Obtener la rama base",
   "47e6147265a28164": "Hacer checkout de archivos",
@@ -5852,6 +5850,7 @@
   "904cfc367ae339b3": "Descargando {name}",
   "1640648c0bcc005a": "Preparando {name}",
   "d9c427b8eee47ebd": "Acerca de {name}",
+  "165a135b316e0054": "No se pudo abrir la página",
   "a272b8a91501acee": "{name} ya está añadido",
   "1a911e3dd1e69be8": "Añadir",
   "84ca50abac9e84ae": "No se pudieron listar las sesiones ACP",
@@ -6117,7 +6116,6 @@
   "957a0e199cb3abf0": "La solicitud de autenticación caducó",
   "9cd6647baae39b79": "Actualiza el proveedor y vuelve a iniciar el flujo de autenticación.",
   "34e971a4cd3cfdf3": "No se pudo continuar la autenticación",
-  "165a135b316e0054": "No se pudo abrir la página",
   "145be1cadcb811f9": [
     "Este proveedor ya no está configurado en ",
     {

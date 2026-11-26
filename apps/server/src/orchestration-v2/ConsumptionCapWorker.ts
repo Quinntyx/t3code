@@ -5,7 +5,11 @@ import {
   type ThreadConsumptionCapHit,
   type ThreadId,
 } from "@t3tools/contracts";
-import { collectLimitPools, resolveInstanceHubRoutes } from "@t3tools/shared/usageLimits";
+import {
+  collectLimitPools,
+  resolveInstanceHubRoutes,
+  usageOrigin,
+} from "@t3tools/shared/usageLimits";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -33,22 +37,28 @@ const clearHit = (threadId: ThreadId, hitAt: string, expectedCap: ThreadConsumpt
 });
 
 /** Quota conditions watch the account behind their scope, or the thread's own account. */
-function quotaInstances(
+function quotaTargets(
   cap: ThreadConsumptionCap,
   usageModels: ReadonlyArray<ConsumptionCapModelUsage>,
   threadProviderInstanceId: ProviderInstanceId,
-): ReadonlySet<ProviderInstanceId> {
-  const instances = new Set<ProviderInstanceId>();
+  threadModel: string | null,
+): ReadonlyMap<ProviderInstanceId, ReadonlySet<string | null>> {
+  const targets = new Map<ProviderInstanceId, Set<string | null>>();
+  const add = (instanceId: ProviderInstanceId, model: string | null) => {
+    const models = targets.get(instanceId) ?? new Set<string | null>();
+    models.add(model);
+    targets.set(instanceId, models);
+  };
   for (const condition of cap.conditions) {
     if (condition.kind !== "quota") continue;
     if (condition.models !== undefined) {
-      for (const model of condition.models) instances.add(model.providerInstanceId);
+      for (const model of condition.models) add(model.providerInstanceId, model.model ?? null);
       continue;
     }
-    for (const model of usageModels) instances.add(model.providerInstanceId);
-    instances.add(threadProviderInstanceId);
+    for (const model of usageModels) add(model.providerInstanceId, model.model);
+    add(threadProviderInstanceId, threadModel);
   }
-  return instances;
+  return targets;
 }
 
 const makeSweep = Effect.gen(function* () {
@@ -61,7 +71,7 @@ const makeSweep = Effect.gen(function* () {
   );
 
   const readWindows = Effect.fn("ConsumptionCapWorker.readWindows")(function* (
-    instanceIds: ReadonlySet<ProviderInstanceId>,
+    targets: ReadonlyMap<ProviderInstanceId, ReadonlySet<string | null>>,
     nowMs: number,
   ) {
     const currentSources = usageSources ? yield* usageSources.current : [];
@@ -75,29 +85,43 @@ const makeSweep = Effect.gen(function* () {
         resetsAt: string | null;
       }>
     >();
-    for (const instanceId of instanceIds) {
+    for (const [instanceId, models] of targets) {
       const instance = yield* instances.getInstance(instanceId);
       const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
-      const windows: Array<{
+      const windowsById = new Map<
+        string,
+        {
+          id: string;
+          kind: "session" | "weekly" | "monthly" | "other";
+          label: string;
+          usedPercent: number;
+          resetsAt: string | null;
+        }
+      >();
+      const pushWindow = (window: {
         id: string;
         kind: "session" | "weekly" | "monthly" | "other";
         label: string;
         usedPercent: number;
         resetsAt: string | null;
-      }> = [];
-      for (const window of snapshot?.usageLimits?.windows ?? []) {
-        windows.push({
-          id: window.id,
-          kind: window.kind,
-          label: window.label,
-          usedPercent: window.usedPercent,
-          resetsAt: window.resetsAt ?? null,
-        });
+      }) => {
+        if (!windowsById.has(window.id)) windowsById.set(window.id, window);
+      };
+      if (snapshot?.usageLimits && !snapshot.usageLimits.unavailable) {
+        for (const window of snapshot.usageLimits.windows) {
+          pushWindow({
+            id: window.id,
+            kind: window.kind,
+            label: window.label,
+            usedPercent: window.usedPercent,
+            resetsAt: window.resetsAt ?? null,
+          });
+        }
       }
       for (const source of snapshot?.usageSources ?? []) {
         if (source.limits.unavailable) continue;
         for (const window of source.limits.windows) {
-          windows.push({
+          pushWindow({
             id: `${source.id}:${window.id}`,
             kind: window.kind,
             label: window.label,
@@ -107,48 +131,56 @@ const makeSweep = Effect.gen(function* () {
         }
       }
       if (snapshot && currentSources.length > 0) {
-        const { hubs, driversByOrigin } = resolveInstanceHubRoutes(snapshot, currentSources);
-        for (const hub of hubs) {
-          const hubAccounts = hub.accounts.filter((account) => {
-            if (account.usageLimits.unavailable) return false;
-            const origin = hub.origin ?? hub.endpoint;
-            if (!origin) return account.driver === snapshot.driver;
-            for (const drivers of driversByOrigin.values()) {
-              if (drivers.has(account.driver)) return true;
-            }
-            return account.driver === snapshot.driver;
-          });
-          const pools = collectLimitPools(
-            hubAccounts.map((account) => ({
-              key: `${hub.id}:${account.id}`,
-              driver: account.driver,
-              displayName: null,
-              email: account.email,
-              workspaceId: account.workspaceId,
-              plan: account.plan,
-              accentColor: undefined,
-              environments: [],
-              sourceLabel: hub.label,
-              redeem: null,
-              limits: account.usageLimits,
-            })),
-            nowMs,
+        const modelList = models.size > 0 ? [...models] : [null];
+        for (const model of modelList) {
+          const { hubs, driversByOrigin } = resolveInstanceHubRoutes(
+            snapshot,
+            currentSources,
+            model,
           );
-          for (const pool of pools) {
-            for (const window of pool.windows) {
-              const nextReset = window.resets.find((reset) => reset.at > nowMs);
-              windows.push({
-                id: `${hub.id}:${pool.driver}:${window.id}`,
-                kind: window.kind,
-                label: window.label,
-                usedPercent: Math.max(0, Math.min(100, 100 - window.remainingPercent)),
-                resetsAt: nextReset ? DateTime.formatIso(DateTime.makeUnsafe(nextReset.at)) : null,
-              });
+          for (const hub of hubs) {
+            const rawOrigin = hub.origin ?? hub.endpoint;
+            const hubOrigin = rawOrigin ? usageOrigin(rawOrigin) : null;
+            const allowedDrivers =
+              (hubOrigin ? driversByOrigin.get(hubOrigin) : undefined) ??
+              new Set([snapshot.driver]);
+            const hubAccounts = hub.accounts.filter(
+              (account) => !account.usageLimits.unavailable && allowedDrivers.has(account.driver),
+            );
+            const pools = collectLimitPools(
+              hubAccounts.map((account) => ({
+                key: `${hub.id}:${account.id}`,
+                driver: account.driver,
+                displayName: null,
+                email: account.email,
+                workspaceId: account.workspaceId,
+                plan: account.plan,
+                accentColor: undefined,
+                environments: [],
+                sourceLabel: hub.label,
+                redeem: null,
+                limits: account.usageLimits,
+              })),
+              nowMs,
+            );
+            for (const pool of pools) {
+              for (const window of pool.windows) {
+                const nextReset = window.resets.find((reset) => reset.at > nowMs);
+                pushWindow({
+                  id: `${hub.id}:${pool.driver}:${window.id}`,
+                  kind: window.kind,
+                  label: window.label,
+                  usedPercent: Math.max(0, Math.min(100, 100 - window.remainingPercent)),
+                  resetsAt: nextReset
+                    ? DateTime.formatIso(DateTime.makeUnsafe(nextReset.at))
+                    : null,
+                });
+              }
             }
           }
         }
       }
-      windowsByInstance.set(instanceId, windows);
+      windowsByInstance.set(instanceId, [...windowsById.values()]);
     }
     return windowsByInstance;
   });
@@ -171,7 +203,12 @@ const makeSweep = Effect.gen(function* () {
         const threadUsage = yield* usage.read(thread.id);
         const usageModels = threadUsage.models.map(capModel);
         const windowsByInstance = yield* readWindows(
-          quotaInstances(cap, usageModels, thread.providerInstanceId),
+          quotaTargets(
+            cap,
+            usageModels,
+            thread.providerInstanceId,
+            thread.modelSelection?.model ?? null,
+          ),
           nowMs,
         );
         const evaluation = evaluateConsumptionCap(

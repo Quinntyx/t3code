@@ -17757,20 +17757,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Stream.runForEach((stored) =>
         threadReactions.run(
           stored.event.threadId,
-          Effect.gen(function* () {
-            const childThreadId = stored.event.threadId;
-            const parentThreadId = yield* appOwnedSubagentParentThreadId(childThreadId);
-            if (parentThreadId === undefined) return;
-            yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(childThreadId));
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Failed to finalize a delegated child after a Stop", {
-                threadId: stored.event.threadId,
-                sequence: stored.sequence,
-                cause,
-              }),
-            ),
-          ),
+          updateDelegatedParentTask(stored.event.threadId),
         ),
       ),
       Effect.forkScoped,

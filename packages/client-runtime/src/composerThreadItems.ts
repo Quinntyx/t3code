@@ -14,7 +14,6 @@ import { getThreadSortTimestamp } from "./state/threadSort.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
 
-const COMPOSER_THREAD_RESULT_LIMIT = 5;
 const COMPOSER_THREAD_TRIGGER_RESULT_LIMIT = 20;
 
 export type ComposerThreadCandidate = ThreadSearchShell &
@@ -84,40 +83,6 @@ function rankThreadMatches<TCandidate extends ComposerThreadCandidate>(
       picks: false,
     }),
   ).map(({ item }) => item);
-}
-
-/**
- * Threads to reference from the composer, matched and ranked like the command
- * palette, without subagent threads or other threads' side chats. The agent reads threads
- * on its own server and on the machines it links to, so candidates stay within those, and a
- * linked machine's threads say which machine they are on.
- */
-export function matchComposerThreadItems(
-  input: ComposerThreadMatchInput,
-  resolve: MFunctionType = mFallback,
-): ComposerThreadItem[] {
-  const query = foldSearchQuery(input.query);
-  if (query.length === 0) return [];
-  const candidates = mentionableThreads(input, true);
-  return rankThreadMatches(candidates, query, input.now)
-    .slice(0, COMPOSER_THREAD_RESULT_LIMIT)
-    .map((shell) => {
-      const machine =
-        shell.environmentId === input.environmentId
-          ? undefined
-          : input.linkedEnvironments.get(shell.environmentId);
-      return {
-        id: `thread:${shell.environmentId}:${shell.id}`,
-        type: "thread",
-        thread: { environmentId: shell.environmentId, threadId: shell.id },
-        label: shell.title,
-        description: isOwnSideChat(shell, input)
-          ? resolve(msg("Side chat"))
-          : machine === undefined
-            ? resolve(msg("Thread", { $context: "noun, search result type" }))
-            : resolve(msg("Thread on {machine}", { machine })),
-      };
-    });
 }
 
 function threadSectionIndex(shell: ComposerThreadTriggerCandidate, now: string): number {

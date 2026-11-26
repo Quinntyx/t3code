@@ -352,6 +352,199 @@ it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the sn
   }),
 );
 
+it.effect(
+  "prefers hub reset over local limits when routed and falls back to Pi usageSources when direct",
+  () =>
+    Effect.gen(function* () {
+      const piId = ProviderInstanceId.make("pi-multi");
+      const piDriver = ProviderDriverKind.make("pi");
+      const adapter = yield* ProviderAdapter.ProviderAdapterV2.pipe(
+        Effect.provide(
+          Layer.mock(ProviderAdapter.ProviderAdapterV2)({
+            instanceId: piId,
+            driver: piDriver,
+          }),
+        ),
+      );
+      let currentSnapshot = {
+        driver: piDriver,
+        auth: { status: "authenticated" },
+        usageRoutes: [{ driver: "codex", origin: "http://hub.test:8317" }],
+        usageLimits: {
+          updatedAt: "2026-11-13T10:00:00.000Z",
+          windows: [
+            {
+              id: "five_hour",
+              kind: "session",
+              label: "Local 5h",
+              usedPercent: 100,
+              resetsAt: "2099-11-13T12:00:00.000Z",
+            },
+          ],
+        },
+        usageSources: [
+          {
+            id: "codex-direct",
+            label: "Codex",
+            driver: "codex",
+            limits: {
+              updatedAt: "2026-11-13T10:00:00.000Z",
+              windows: [
+                {
+                  id: "five_hour",
+                  kind: "session",
+                  label: "Direct 5h",
+                  usedPercent: 100,
+                  resetsAt: "2099-11-13T14:00:00.000Z",
+                },
+              ],
+            },
+          },
+        ],
+      } as unknown as ServerProvider;
+      const instance: ProviderInstance = {
+        instanceId: piId,
+        driverKind: piDriver,
+        continuationIdentity: { driverKind: piDriver, continuationKey: "pi-multi" },
+        enabled: true,
+        displayName: undefined,
+        orchestrationAdapter: adapter,
+        textGeneration: {
+          generateBranchName: () => Effect.die("unused"),
+          generateCommitMessage: () => Effect.die("unused"),
+          generatePrContent: () => Effect.die("unused"),
+          generateThreadTitle: () => Effect.die("unused"),
+          generateReviewGuide: () => Effect.die("unused"),
+          generateTranscriptionPostProcessing: () => Effect.die("unused"),
+        },
+        snapshot: {
+          refreshUsage: Effect.void,
+          getSnapshot: Effect.sync(() => currentSnapshot),
+          refresh: Effect.die("unused"),
+          resolveMaintenance: () => Effect.die("unused"),
+          applyUsageLimits: () => Effect.die("unused"),
+          streamChanges: Stream.empty,
+        },
+      };
+      const instances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+        getInstance: (id) => Effect.succeed(id === piId ? instance : undefined),
+      });
+      let hubReset: string | null = "2099-11-13T18:00:00.000Z";
+      yield* Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const threadEvent = yield* threadCreatedEvent(now);
+        if (threadEvent.type !== "thread.created") {
+          return assert.fail("expected thread.created");
+        }
+        const patchedThread = {
+          ...threadEvent,
+          payload: {
+            ...threadEvent.payload,
+            providerInstanceId: piId,
+            modelSelection: { instanceId: piId, model: "cliproxyapi/gpt-5.4" },
+          },
+        };
+        yield* eventSink.write({ events: [patchedThread] });
+        const baseInput = {
+          providerSessionId: yield* idAllocator.allocate.providerSession({
+            providerInstanceId: piId,
+            threadId: patchedThread.threadId,
+          }),
+          providerInstanceId: piId,
+          threadId: patchedThread.threadId,
+        };
+        const routedStored = yield* ingestor.ingestNormalized({
+          ...baseInput,
+          event: {
+            type: "turn.terminal",
+            driver: piDriver,
+            providerThreadId: idAllocator.derive.providerThread({
+              driver: piDriver,
+              nativeThreadId: "pi-hub",
+            }),
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: piDriver,
+              nativeTurnId: "hub-turn",
+            }),
+            runOrdinal: 1,
+            failureItemOrdinal: 1,
+            status: "failed",
+            failure: makeProviderFailure({ class: "usage_limit", message: "Hub rate limit" }),
+            threadDisposition: "reusable",
+          },
+        });
+        const routedEvent = routedStored[0]?.event;
+        assert.equal(
+          routedEvent?.type === "turn-item.updated" && routedEvent.payload.type === "error"
+            ? routedEvent.payload.failure.resetAt
+            : undefined,
+          "2099-11-13T18:00:00.000Z",
+        );
+
+        // Direct Pi model (no hub route, no top-level usageLimits) reads snapshot.usageSources.
+        hubReset = null;
+        currentSnapshot = {
+          ...currentSnapshot,
+          usageRoutes: [],
+          usageLimits: undefined,
+        } as unknown as ServerProvider;
+        const directThread = yield* threadCreatedEvent(now);
+        if (directThread.type !== "thread.created") {
+          return assert.fail("expected thread.created");
+        }
+        const patchedDirectThread = {
+          ...directThread,
+          payload: {
+            ...directThread.payload,
+            providerInstanceId: piId,
+            modelSelection: { instanceId: piId, model: "openai-codex/gpt-5.4" },
+          },
+        };
+        yield* eventSink.write({ events: [patchedDirectThread] });
+        const directStored = yield* ingestor.ingestNormalized({
+          providerSessionId: yield* idAllocator.allocate.providerSession({
+            providerInstanceId: piId,
+            threadId: patchedDirectThread.threadId,
+          }),
+          providerInstanceId: piId,
+          threadId: patchedDirectThread.threadId,
+          event: {
+            type: "turn.terminal",
+            driver: piDriver,
+            providerThreadId: idAllocator.derive.providerThread({
+              driver: piDriver,
+              nativeThreadId: "pi-direct",
+            }),
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: piDriver,
+              nativeTurnId: "direct-turn",
+            }),
+            runOrdinal: 1,
+            failureItemOrdinal: 1,
+            status: "failed",
+            failure: makeProviderFailure({ class: "usage_limit", message: "Direct rate limit" }),
+            threadDisposition: "reusable",
+          },
+        });
+        const directEvent = directStored[0]?.event;
+        assert.equal(
+          directEvent?.type === "turn-item.updated" && directEvent.payload.type === "error"
+            ? directEvent.payload.failure.resetAt
+            : undefined,
+          "2099-11-13T14:00:00.000Z",
+        );
+      }).pipe(
+        Effect.provide(makeLayerTest(layerTestEventSink, instances)),
+        Effect.provideService(UsageLimitResetFallback, {
+          resetAt: () => Effect.sync(() => hubReset),
+        }),
+      );
+    }),
+);
+
 it.effect("records accepted billed turn usage once without billing the context window", () => {
   const recorded: Array<ProviderUsageAnalytics.ProviderTurnReport> = [];
   const layerAnalytics = Layer.succeed(ProviderUsageAnalytics.ProviderTurnAnalytics, {

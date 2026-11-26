@@ -159,6 +159,10 @@ function quotaDriverForModel(
     ?.replace(/\[1m\]$/i, "")
     .replace(/\([^)]*\)$/, "")
     .replace(/:fast$/i, "");
+  const modelProvider = cleaned?.split(/[/:]/)[0];
+  if (modelProvider === "opencode-go" || modelProvider === "opencode") {
+    return "opencode" as ServerProvider["driver"];
+  }
   const modelId = cleaned?.split(/[/:]/).at(-1);
   if (modelId?.startsWith("claude-")) return "claudeAgent" as ServerProvider["driver"];
   if (modelId !== undefined && /^(?:gpt-|codex(?:-|$)|o\d(?:-|$))/.test(modelId)) {
@@ -167,11 +171,10 @@ function quotaDriverForModel(
   return driver;
 }
 
-export function usageLimitSourceResetAt(
-  sources: UsageLimitSourceSnapshots,
-  provider: ServerProvider | undefined,
+export function usageSourcesResetAt(
+  provider: Pick<ServerProvider, "driver" | "usageSources"> | undefined,
   now: number,
-  model?: string,
+  model?: string | null,
 ): string | null {
   if (provider === undefined) return null;
   const quotaDriver = quotaDriverForModel(provider.driver, model);
@@ -195,11 +198,21 @@ export function usageLimitSourceResetAt(
       earliestNative = resetAt;
     }
   }
-  if (earliestNative !== null) return earliestNative;
+  return earliestNative;
+}
+
+export function usageLimitSourceResetAt(
+  sources: UsageLimitSourceSnapshots,
+  provider: ServerProvider | undefined,
+  now: number,
+  model?: string,
+): string | null {
+  if (provider === undefined) return null;
   const { driver, hubs } = resolveInstanceHubRoutes(provider, sources, model ?? null);
   const healthyHubs = hubs.filter((source) => !source.error);
-  if (healthyHubs.length === 0) return null;
-  return hubPoolResetAt(healthyHubs, driver, model ?? null, now);
+  const hubReset =
+    healthyHubs.length === 0 ? null : hubPoolResetAt(healthyHubs, driver, model ?? null, now);
+  return hubReset ?? usageSourcesResetAt(provider, now, model);
 }
 
 export function resolveNewThreadModelSelection(input: {
@@ -543,7 +556,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
       if (provider.usageLimits && limitsNotice(provider.usageLimits) === null) {
         merge(nativeRowKey(resolveKey, environmentId, provider), {
           key: `${environmentId}:${provider.instanceId}`,
-          driver: provider.driver,
+          driver: provider.usageLimits.ownerDriver ?? provider.driver,
           displayName: provider.displayName?.trim() || null,
           email: provider.auth.email,
           workspaceId: provider.auth.workspaceId,
@@ -1216,7 +1229,8 @@ export function resolveInstanceHubRoutes(
 } {
   const driver = quotaDriverForModel(provider.driver, model);
   const modelProvider = model?.split(/[/:]/)[0];
-  if (provider.driver === "pi" && model != null && !isPiHubModelProvider(modelProvider)) {
+  const isPiHubModel = provider.driver === "pi" && isPiHubModelProvider(modelProvider);
+  if (provider.driver === "pi" && model != null && !isPiHubModel) {
     return { driver, hubs: [], origins: [], driversByOrigin: new Map(), directOnly: true };
   }
   const driversByOrigin = new Map<string, Set<ServerProvider["driver"]>>();
@@ -1231,8 +1245,11 @@ export function resolveInstanceHubRoutes(
     addOriginDriver(provider.auth.endpoint, provider.driver);
     if (driver !== provider.driver) addOriginDriver(provider.auth.endpoint, driver);
   }
+  // Non-Claude/non-Codex CLIProxyAPI models on Pi (e.g. v8 OpenRouter/Gemini slugs) resolve with
+  // driver === "pi", so include all configured hub routes and let hubRoutes match by model slug.
+  const matchAllPiHubRoutes = isPiHubModel && driver === provider.driver;
   for (const route of provider.usageRoutes ?? []) {
-    if (model != null && route.driver !== driver) continue;
+    if (model != null && !matchAllPiHubRoutes && route.driver !== driver) continue;
     addOriginDriver(route.origin, route.driver);
   }
   if (driversByOrigin.size === 0) {
@@ -1720,12 +1737,17 @@ export function summarizeProviderLimits(
   });
   if (!own && localSources.length === 0 && pooled.length === 0) return null;
   const ownExhausted = exhaustedUsageWindow(provider, now) !== undefined;
-  const pooledExhausted =
-    pooled.length > 0 &&
-    pooled.every((entry) => entry.windows.some((window) => window.remainingPercent <= 0));
+  const isGeneralPoolWindow = (window: ProviderLimitWindow) =>
+    !window.key.slice(window.key.indexOf(":") + 1).startsWith(CLAUDE_SCOPED_WINDOW_PREFIX);
+  const allSources = [...localSources, ...pooled];
+  const allSourcesExhausted =
+    allSources.length > 0 &&
+    allSources.every((entry) =>
+      entry.windows.some((window) => isGeneralPoolWindow(window) && window.remainingPercent <= 0),
+    );
   return {
     windows: own ? summarizePool(own, now) : [],
-    sources: [...localSources, ...pooled],
-    exhausted: own ? ownExhausted : pooledExhausted,
+    sources: allSources,
+    exhausted: own ? ownExhausted : allSourcesExhausted,
   };
 }

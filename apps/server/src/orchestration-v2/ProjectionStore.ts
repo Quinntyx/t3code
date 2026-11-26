@@ -5165,7 +5165,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             FROM orchestration_v2_projection_threads child
             INNER JOIN orchestration_v2_projection_runs child_run
               ON child_run.thread_id = child.thread_id
-            WHERE json_extract(child.payload_json, '$.lineage.parentThreadId') = t.thread_id
+            WHERE child.deleted_at IS NULL
+              AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              AND json_extract(child.payload_json, '$.lineage.parentThreadId') = t.thread_id
               AND child_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
           ) AS has_active_delegates,
           EXISTS (
@@ -5177,14 +5179,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND item.type IN ('command_execution', 'dynamic_tool', 'subagent')
               AND item.status IN ('pending', 'running', 'waiting')
               AND (item_run.status IS NULL OR item_run.status <> 'rolled_back')
+              AND NOT (
+                item.type = 'dynamic_tool'
+                AND CASE WHEN json_valid(item.payload_json)
+                  THEN json_extract(item.payload_json, '$.input.persistent') = 1
+                  ELSE 0 END
+              )
           ) AS has_active_background_work
         FROM orchestration_v2_projection_threads t
         WHERE t.deleted_at IS NULL
-          AND json_extract(t.payload_json, '$.archivedAt') IS NULL
-          AND (
+          AND t.archived_at IS NULL
+          AND CASE WHEN json_valid(t.payload_json) THEN
             json_extract(t.payload_json, '$.consumptionCap') IS NOT NULL
             OR json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL
-          )
+            ELSE 0 END
         ORDER BY t.thread_id
       `;
         return yield* Effect.forEach(
@@ -5492,8 +5500,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 json_extract(failure.payload_json, '$.failure.overloaded') = 1
                 ELSE 0 END
           )
-          AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+          AND t.archived_at IS NULL
           AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+          AND json_extract(t.payload_json, '$.consumptionCapHit') IS NULL
           -- A thread waiting on the user cannot be retried underneath the question.
           AND NOT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_runtime_requests request
@@ -10202,10 +10211,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE json_type(link.value, '$.watch') IS NOT NULL
               )
               ELSE 0 END
-            OR CASE WHEN ${indexedField("$.threadWatches[0]", "json_type")} IS NOT NULL
-              THEN 1 ELSE 0 END
-            OR CASE WHEN ${indexedField("$.awaitedScheduledTaskIds[0]", "json_type")} IS NOT NULL
-              THEN 1 ELSE 0 END
+            OR t.thread_id IN (
+              SELECT w.thread_id FROM orchestration_v2_projection_threads w
+              WHERE w.deleted_at IS NULL AND w.archived_at IS NULL
+                AND CASE WHEN json_valid(w.payload_json) THEN
+                  json_type(w.payload_json, '$.threadWatches[0]') IS NOT NULL
+                  ELSE 0 END
+            )
+            OR t.thread_id IN (
+              SELECT a.thread_id FROM orchestration_v2_projection_threads a
+              WHERE a.deleted_at IS NULL AND a.archived_at IS NULL
+                AND CASE WHEN json_valid(a.payload_json) THEN
+                  json_type(a.payload_json, '$.awaitedScheduledTaskIds[0]') IS NOT NULL
+                  ELSE 0 END
+            )
             OR t.thread_id IN (
               SELECT err.thread_id
               FROM orchestration_v2_projection_turn_items err

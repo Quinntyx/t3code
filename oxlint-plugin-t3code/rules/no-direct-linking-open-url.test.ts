@@ -25,6 +25,15 @@ describe("t3code/no-direct-linking-open-url", () => {
     `,
   );
 
+  rule.valid(
+    "allows a namespace import's other methods",
+    `
+      import * as Linking from "expo-linking";
+
+      void Linking.createURL("/");
+    `,
+  );
+
   rule.invalid(
     "reports Linking.openURL calls",
     `
@@ -37,5 +46,43 @@ describe("t3code/no-direct-linking-open-url", () => {
   rule.invalid(
     "reports openURL destructured from react-native",
     `import { openURL } from "react-native";`,
+  );
+
+  rule.invalid(
+    "reports the namespace's openURL",
+    `
+    import * as L from "expo-linking";
+
+    void L.openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports a renamed Linking import",
+    `
+    import { Linking as RnLinking } from "react-native";
+
+    void RnLinking.openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports an openURL destructured from Linking",
+    `
+    import { Linking } from "react-native";
+
+    const { openURL } = Linking;
+    void openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports a renamed openURL destructured from Linking",
+    `
+    import * as Linking from "expo-linking";
+
+    const { openURL: open } = Linking;
+    void open("https://example.com");
+  `,
   );
 });
