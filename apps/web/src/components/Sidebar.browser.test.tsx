@@ -137,7 +137,10 @@ describe("sidebar numbered jumps", () => {
   it("numbers the unsent draft at the top before the threads below it", async () => {
     const initial = useComposerDraftStore.getState();
     using stack = new DisposableStack();
-    stack.defer(() => useComposerDraftStore.setState(initial, true));
+    stack.defer(() => {
+      useComposerDraftStore.setState(initial, true);
+      useComposerDraftStore.persist.clearStorage();
+    });
     const previousSettings = getClientSettings();
     stack.defer(() => __setClientSettingsForTests(previousSettings));
     __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);

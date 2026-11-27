@@ -18,5 +18,9 @@ beforeEach(async () => {
   await commands.resetPointer();
 });
 
+// Playwright shares one Chromium context (and localStorage) across test files; start each file
+// with empty storage before its imports hydrate persisted stores.
+localStorage.clear();
+
 // The app initializes GT at startup; components using its hooks need the same here.
 initializeI18n(() => {});
