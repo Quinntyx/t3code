@@ -1335,7 +1335,93 @@ it.effect("applies the caller's access rules to a proxied tool's annotations", (
       expect(refused.content).toEqual([
         { type: "text", text: expect.stringContaining("read-only access") },
       ]);
-      expect(fixtureCalls).toEqual([{ server: "fixture", name: "echo", args: { text: "hi" } }]);
+
+      // A fenced linked caller can read, but cannot invoke mutating external MCP tools.
+      const fencedLinkedClient: McpInvocationContext.McpInvocationScope = {
+        ...invocation,
+        thread: undefined,
+        requestNamespace: "client:linked-fixture",
+        client: {
+          sessionId: "session-linked-fixture",
+          label: "Remote Mac",
+          access: "auto",
+          linked: true,
+        },
+      };
+      expect(
+        (yield* call("fixture_echo", { text: "linked" }, fencedLinkedClient)).structuredContent,
+      ).toEqual({ echoed: "linked" });
+      const linkedRefused = yield* call("fixture_set", { value: "changed" }, fencedLinkedClient);
+      expect(linkedRefused.isError).toBe(true);
+      expect(linkedRefused.content).toEqual([
+        { type: "text", text: expect.stringContaining("mutating external MCP tools") },
+      ]);
+
+      // A plan-mode thread caller can read, but cannot invoke mutating external MCP tools.
+      const planThreadId = ThreadId.make("thread-plan-proxied");
+      const planContext = yield* Layer.build(
+        Layer.mergeAll(
+          McpHttpServer.layerInProcessMcpServer,
+          layerExternalMcpStub({
+            tools: Effect.succeed(fixtureTools),
+            changes: Stream.fromPubSub(changes),
+          }),
+          ServerSettings.layerTest(),
+          Layer.mock(MailInbox.MailInbox)({
+            accounts: Effect.succeed({
+              accounts: [],
+              taggingEnabled: false,
+              refreshAvailable: false,
+            }),
+          }),
+          Layer.mock(EmailRequests.EmailRequests)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadShell: (threadId) =>
+              Effect.succeed(
+                McpToolAccessTestkit.liveThreadShell(threadId, { interactionMode: "plan" }),
+              ),
+          }),
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      );
+      const { server: planServer, registered: planRegistered } = yield* startRegisteredMcpProxy(
+        planContext,
+        2,
+      );
+      yield* Deferred.await(planRegistered);
+      const planScope: McpInvocationContext.McpInvocationScope = {
+        ...invocation,
+        thread: {
+          threadId: planThreadId,
+          providerSessionId: "provider-session-plan",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+      };
+      const planRead = yield* planServer
+        .callTool({ name: "fixture_echo", arguments: { text: "plan" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, planScope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(planRead.structuredContent).toEqual({ echoed: "plan" });
+      const planRefused = yield* planServer
+        .callTool({ name: "fixture_set", arguments: { value: "changed" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, planScope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(planRefused.isError).toBe(true);
+      expect(planRefused.content).toEqual([
+        { type: "text", text: expect.stringContaining("plan-mode thread") },
+      ]);
+
+      expect(fixtureCalls).toEqual([
+        { server: "fixture", name: "echo", args: { text: "hi" } },
+        { server: "fixture", name: "echo", args: { text: "linked" } },
+        { server: "fixture", name: "echo", args: { text: "plan" } },
+      ]);
     }),
   ),
 );

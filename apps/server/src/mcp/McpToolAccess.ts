@@ -167,9 +167,25 @@ export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A,
 
 /**
  * The policy a toolkit tool declares, for one T3 registers outside a toolkit, such as a proxied
- * MCP server tool. A read is open like `reads`; anything else acts like `actsAsCaller`.
+ * MCP server tool. A read is open like `reads`; anything else requires a live, non-fenced,
+ * non-plan caller so fenced linked callers and plan-mode threads cannot invoke external mutations.
  */
-export const proxiedCaller = (writes: boolean) => (writes ? writingCaller : Effect.void);
+export const proxiedCaller = (writes: boolean) =>
+  writes
+    ? writingCaller.pipe(
+        Effect.tap((caller) => assertNotLinked(caller, "call mutating external MCP tools")),
+        Effect.tap((caller) =>
+          caller.caller?.interactionMode === "plan"
+            ? Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "capability_denied",
+                  message: "A plan-mode thread cannot call mutating external MCP tools.",
+                }),
+              )
+            : Effect.void,
+        ),
+      )
+    : Effect.void;
 
 /**
  * Changes something that belongs to no thread, such as a pending upload or a
