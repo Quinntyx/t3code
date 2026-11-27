@@ -2585,7 +2585,8 @@ export const stageAppleSpeech = Effect.fn("stageAppleSpeech")(function* (input: 
   readonly arch: typeof BuildArch.Type;
   readonly verbose: boolean;
 }) {
-  if (input.platform !== "mac") return;
+  // The Apple Speech helper uses Xcode 26's Speech framework and can only be built on macOS.
+  if (input.platform !== "mac" || (yield* HostProcess.Platform) !== "darwin") return;
   const path = yield* Path.Path;
   yield* runCommand(
     ChildProcess.make(
@@ -3064,6 +3065,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
 ) {
+  const packagedOnMac = platform === "mac" && (yield* HostProcess.Platform) === "darwin";
   const buildConfig: Record<string, unknown> = {
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId: DESKTOP_APP_ID,
@@ -3089,7 +3091,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
-      ...(platform === "mac" ? MAC_APPLE_SPEECH_EXTRA_RESOURCES : []),
+      ...(packagedOnMac ? MAC_APPLE_SPEECH_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
@@ -3116,7 +3118,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "mac") {
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
-    const packagedOnMac = (yield* HostProcess.Platform) === "darwin";
     if (!packagedOnMac) {
       // Native modules ship darwin prebuilds; a rebuild here would compile host binaries.
       buildConfig.npmRebuild = false;

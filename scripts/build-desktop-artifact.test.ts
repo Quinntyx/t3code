@@ -648,10 +648,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const onMac = yield* configOn("darwin");
       assert.deepStrictEqual((onMac.mac as { target: unknown }).target, ["dmg", "zip"]);
       assert.isUndefined(onMac.npmRebuild);
+      assert.isTrue(
+        (onMac.extraResources as Array<{ to: string }>).some(
+          (entry) => entry.to === "apple-speech",
+        ),
+      );
 
       const onLinux = yield* configOn("linux");
       assert.deepStrictEqual((onLinux.mac as { target: unknown }).target, ["zip"]);
       assert.isFalse(onLinux.npmRebuild);
+      assert.isFalse(
+        (onLinux.extraResources as Array<{ to: string }>).some(
+          (entry) => entry.to === "apple-speech",
+        ),
+      );
     }),
   );
 
