@@ -28,7 +28,6 @@ import {
   resolveInstanceHubRoutes,
   resolveUsageLimitResetAt,
   summarizeProviderLimits,
-  usageLimitSourceResetAt,
   usesChatGptSharing,
   resolveNewThreadModelSelection,
 } from "./usageLimits.ts";
@@ -2106,7 +2105,7 @@ describe("hub routing and pool resets", () => {
     });
     // Because Hub B is routed only for Codex, Hub B's open Claude account does not suppress Hub A's Claude reset.
     expect(
-      usageLimitSourceResetAt([hubA, hubB], piProvider, now, "cliproxy/claude-opus-4-6:fast"),
+      resolveUsageLimitResetAt([hubA, hubB], piProvider, now, "cliproxy/claude-opus-4-6:fast"),
     ).toBe("2026-09-03T14:00:00.000Z");
     // collectProviderUsageLimits uses quotaDriverForModel and respects Pi direct vs routed boundaries.
     const routedReport = collectProviderUsageLimits(
@@ -2316,7 +2315,7 @@ describe("hub routing and pool resets", () => {
     expect(hubPoolResetAt([hubWithUndated], claude, "claude-opus-4-6", now)).toBeNull();
   });
 
-  it("returns null from usageLimitSourceResetAt when any routed hub account still has room", () => {
+  it("returns null from resolveUsageLimitResetAt when any routed hub account still has room", () => {
     const claudeHubProvider = provider({
       driver: claude,
       auth: { status: "authenticated", endpoint: "http://localhost:8317" },
@@ -2343,7 +2342,7 @@ describe("hub routing and pool resets", () => {
       ],
     };
     expect(
-      usageLimitSourceResetAt([mixedHub], claudeHubProvider, now, "claude-opus-4-6"),
+      resolveUsageLimitResetAt([mixedHub], claudeHubProvider, now, "claude-opus-4-6"),
     ).toBeNull();
     const allSpentHub = {
       ...mixedHub,
@@ -2352,7 +2351,7 @@ describe("hub routing and pool resets", () => {
         usageLimits: { checkedAt, windows: [spentWindow] },
       })),
     };
-    expect(usageLimitSourceResetAt([allSpentHub], claudeHubProvider, now, "claude-opus-4-6")).toBe(
+    expect(resolveUsageLimitResetAt([allSpentHub], claudeHubProvider, now, "claude-opus-4-6")).toBe(
       "2026-09-03T14:00:00.000Z",
     );
 

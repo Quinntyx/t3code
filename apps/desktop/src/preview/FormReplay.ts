@@ -9,20 +9,38 @@ export interface FormReplay {
 // at the same URL cannot resubmit the form.
 const FORM_REPLAY_TTL_MS = 30_000;
 
+interface PendingFormReplay {
+  readonly replay: FormReplay;
+  readonly expiresAt: number;
+}
+
 /** Form POSTs opening a new tab, waiting for that tab's webview to attach. */
 export const makeFormReplays = () => {
-  const pending = new Map<string, { readonly replay: FormReplay; readonly expiresAt: number }>();
+  // Partition first: two profiles can POST the same URL at once without overwriting each other.
+  const pending = new Map<unknown, Map<string, PendingFormReplay>>();
+  const prune = (now: number): void => {
+    for (const [session, entries] of pending) {
+      for (const [url, entry] of entries) {
+        if (entry.expiresAt <= now) entries.delete(url);
+      }
+      if (entries.size === 0) pending.delete(session);
+    }
+  };
   return {
     offer: (replay: FormReplay, now: number): void => {
-      pending.set(replay.url, { replay, expiresAt: now + FORM_REPLAY_TTL_MS });
+      prune(now);
+      const entries = pending.get(replay.session) ?? new Map<string, PendingFormReplay>();
+      entries.set(replay.url, { replay, expiresAt: now + FORM_REPLAY_TTL_MS });
+      pending.set(replay.session, entries);
     },
     claim: (url: string, session: unknown, now: number): FormReplay | undefined => {
-      for (const [key, entry] of pending) {
-        if (entry.expiresAt <= now) pending.delete(key);
-      }
-      const entry = pending.get(url);
-      if (!entry || entry.replay.session !== session) return undefined;
-      pending.delete(url);
+      prune(now);
+      const entries = pending.get(session);
+      if (entries === undefined) return undefined;
+      const entry = entries.get(url);
+      if (entry === undefined) return undefined;
+      entries.delete(url);
+      if (entries.size === 0) pending.delete(session);
       return entry.replay;
     },
   };

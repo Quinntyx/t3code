@@ -62,7 +62,8 @@ const load = (key: string, refresh: boolean) => {
   for (const url of urls) query.append("source", url);
   if (refresh) query.set("refresh", "1");
   publish({ ...catalogState, key, loading: true });
-  void fetch(`/api/buddies/catalog?${query.toString()}`)
+  // Refreshing clones or re-clones sources, so the catalog is written through POST.
+  void fetch(`/api/buddies/catalog?${query.toString()}`, { method: "POST" })
     .then((response) => {
       if (!response.ok) throw new Error(`Buddy sources failed with ${response.status}.`);
       return response.json() as Promise<{ sources: ReadonlyArray<BuddySourceEntry> }>;

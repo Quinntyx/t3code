@@ -6,16 +6,16 @@ import {
   type UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import {
-  antigravityWindowLimitsModel,
   collectLimitAccounts,
   collectLimitPools,
   collectProviderUsageLimits,
   displayLimitWindows,
-  hubRoutes,
   isPiHubModelProvider,
   type LimitPoolAmount,
   type LimitPoolWindow,
+  matchRoutedHubAccount,
   resolveInstanceHubRoutes,
+  usageWindowLimitsModel,
 } from "@t3tools/shared/usageLimits";
 import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
 
@@ -39,13 +39,17 @@ export function resolveThreadDetailsLimits(
 ): ThreadDetailsLimits | null {
   const provider = providers.find((entry) => entry.instanceId === providerInstanceId);
   if (!provider) return null;
-  const { driver: quotaDriver, hubs } = resolveInstanceHubRoutes(provider, sources, model);
+  const route = resolveInstanceHubRoutes(provider, sources, model);
+  const { driver: quotaDriver, hubs } = route;
   const modelProvider = model?.split(/[/:]/)[0];
   const piHubModel = provider.driver === "pi" && isPiHubModelProvider(modelProvider);
   if (hubs.length > 0) {
     // An instance routed to a hub spends that hub's pool for the selected model; never fall back
     // to an unrelated local CLI login when the hub pool is unreadable or empty.
-    return hubPool(quotaDriver, model, providers, hubs, now);
+    const healthyHubs = hubs.filter((source) => !source.error);
+    return healthyHubs.length === 0
+      ? null
+      : hubPool(route, provider.driver, model, providers, healthyHubs, now);
   }
   if (piHubModel) {
     // Offline or unconfigured CLIProxyAPI hub on Pi must not display unrelated local limits.
@@ -83,28 +87,27 @@ export function nextPoolReset(window: LimitPoolWindow, now: number) {
 }
 
 function hubPool(
-  driver: ServerProvider["driver"],
+  route: ReturnType<typeof resolveInstanceHubRoutes>,
+  providerDriver: ServerProvider["driver"],
   model: string | null,
   providers: readonly ServerProvider[],
   sources: UsageLimitSourceSnapshots,
   now: number,
 ): ThreadDetailsLimits | null {
-  const routes = hubRoutes(sources, driver, model);
+  const routes = matchRoutedHubAccount(route, sources, providerDriver, model);
   const routed = sources.map((source) => ({
     ...source,
-    accounts: source.accounts.filter(routes).map((account) =>
-      account.driver === "antigravity"
-        ? {
-            ...account,
-            usageLimits: {
-              ...account.usageLimits,
-              windows: account.usageLimits.windows.filter((window) =>
-                antigravityWindowLimitsModel(window, model),
-              ),
-            },
-          }
-        : account,
-    ),
+    accounts: source.accounts
+      .filter((account) => routes(account, source))
+      .map((account) => ({
+        ...account,
+        usageLimits: {
+          ...account.usageLimits,
+          windows: account.usageLimits.windows.filter((window) =>
+            usageWindowLimitsModel(account.driver, window, model, account.usageLimits.windows),
+          ),
+        },
+      })),
   }));
   const readable = routed
     .flatMap((source) => source.accounts)

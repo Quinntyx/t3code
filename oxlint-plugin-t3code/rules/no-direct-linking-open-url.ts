@@ -38,6 +38,8 @@ export default defineRule({
     const linkingNames = new Set<string>();
     const reactNativeNamespaces = new Set<string>();
     const openUrlNames = new Set<string>();
+    // A name reported where it was bound is not reported again at its call site.
+    const reportedBindings = new Set<string>();
 
     const namesLinking = (node: unknown): boolean => {
       const expression = unwrapExpression(node);
@@ -80,6 +82,7 @@ export default defineRule({
             if (Option.isNone(imported)) continue;
             if (imported.value === "openURL") {
               openUrlNames.add(specifier.local.name);
+              reportedBindings.add(specifier.local.name);
               context.report({ node: specifier, message: MESSAGE });
             } else if (imported.value === "Linking") {
               linkingNames.add(specifier.local.name);
@@ -90,6 +93,32 @@ export default defineRule({
         }
       },
       VariableDeclarator(node) {
+        const binding = unwrapExpression(node.id);
+        const bindingValue = Option.getOrUndefined(binding);
+        // `const L = Linking` and `const L = RN.Linking` rename the API, not a call.
+        if (bindingValue?.type === "Identifier" && namesLinking(node.init)) {
+          linkingNames.add(bindingValue.name);
+          return;
+        }
+        // `const { Linking: L } = RN` renames the API through a namespace import.
+        if (bindingValue?.type === "ObjectPattern") {
+          const init = unwrapExpression(node.init);
+          if (
+            Option.isSome(init) &&
+            init.value.type === "Identifier" &&
+            reactNativeNamespaces.has(init.value.name)
+          ) {
+            for (const property of bindingValue.properties) {
+              if (
+                property.type !== "Property" ||
+                Option.getOrUndefined(getPropertyName(property.key)) !== "Linking"
+              )
+                continue;
+              const bound = identifierName(property.value);
+              if (Option.isSome(bound)) linkingNames.add(bound.value);
+            }
+          }
+        }
         // `const open = Linking.openURL` binds the function; calling it is the same direct call.
         const init = unwrapExpression(node.init);
         if (
@@ -99,16 +128,21 @@ export default defineRule({
           isOpenUrlProperty(init.value.property)
         ) {
           const bound = identifierName(node.id);
-          if (Option.isSome(bound)) openUrlNames.add(bound.value);
+          if (Option.isSome(bound)) {
+            openUrlNames.add(bound.value);
+            reportedBindings.add(bound.value);
+          }
           context.report({ node: init.value, message: MESSAGE });
         }
-        const binding = unwrapExpression(node.id);
-        if (Option.isNone(binding) || binding.value.type !== "ObjectPattern") return;
+        if (bindingValue?.type !== "ObjectPattern") return;
         if (!namesLinking(node.init)) return;
-        for (const property of binding.value.properties) {
+        for (const property of bindingValue.properties) {
           if (property.type !== "Property" || !isOpenUrlProperty(property.key)) continue;
           const bound = identifierName(property.value);
-          if (Option.isSome(bound)) openUrlNames.add(bound.value);
+          if (Option.isSome(bound)) {
+            openUrlNames.add(bound.value);
+            reportedBindings.add(bound.value);
+          }
           context.report({ node: property, message: MESSAGE });
         }
       },
@@ -116,7 +150,9 @@ export default defineRule({
         const callee = unwrapExpression(node.callee);
         if (Option.isNone(callee)) return;
         if (namesOpenUrl(callee.value)) {
-          context.report({ node: callee.value, message: MESSAGE });
+          if (!reportedBindings.has(callee.value.name)) {
+            context.report({ node: callee.value, message: MESSAGE });
+          }
           return;
         }
         const expression = callee.value;

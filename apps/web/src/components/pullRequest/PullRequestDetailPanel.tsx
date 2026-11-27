@@ -978,7 +978,11 @@ export function PullRequestDetailPanel({
     onActed?.("merge", "sent");
     const result = await mergeStack({
       environmentId,
-      input: { ...reference, mergeMethod: selectedMergeMethod },
+      input: {
+        ...reference,
+        mergeMethod: selectedMergeMethod,
+        ...(detail?.headSha === undefined ? {} : { expectedHeadSha: detail.headSha }),
+      },
     });
     setPendingAction(null);
     // A stack merge can stop partway, so the host is reread either way.

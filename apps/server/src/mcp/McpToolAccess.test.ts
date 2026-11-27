@@ -19,6 +19,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
+import { resolveT3McpToolPresentation } from "@t3tools/shared/t3McpToolPresentation";
 import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -26,6 +27,7 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
+import { nativeToolNames } from "./nativeToolNames.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 
 const supervisedThreadId = ThreadId.make("thread:supervised");
@@ -529,3 +531,10 @@ it.each(["notify_voice", "t3_submit_output"] as const)(
     );
   },
 );
+
+it("registers presentation metadata for every native T3 MCP tool", () => {
+  const missing = [...nativeToolNames].filter(
+    (name) => resolveT3McpToolPresentation(name) === null,
+  );
+  expect(missing).toEqual([]);
+});

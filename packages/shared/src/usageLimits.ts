@@ -64,54 +64,32 @@ function exhaustedUsageWindows(
   model?: string | null,
 ) {
   const windows = provider?.usageLimits?.windows ?? [];
+  const driver = provider?.usageLimits?.ownerDriver ?? provider?.driver;
   const exhausted = windows.filter(
     (window) =>
       (window.usedPercent ?? 0) >= 100 &&
-      (typeof model !== "string" ||
-        window.modelIds === undefined ||
-        window.modelIds.includes(model)) &&
-      (typeof model !== "string" ||
-        window.providerIds === undefined ||
-        window.providerIds.includes(model.split("/")[0] ?? "")) &&
       (!window.resetsAt ||
         !Number.isFinite(Date.parse(window.resetsAt)) ||
         Date.parse(window.resetsAt) > now),
   );
   if (model === undefined) return exhausted;
-  // A provider reading another provider's login reports that login's pool, so classify by its owner.
-  switch (provider?.usageLimits?.ownerDriver ?? provider?.driver) {
-    case "cursor": {
-      if (model === null) return exhausted;
-      const api = exhausted.find((window) => window.id === "apiPercentUsed");
-      const auto = exhausted.find((window) => window.id === "autoPercentUsed");
-      return /^(auto|default|grok|composer)/.test(model)
-        ? auto && api
-          ? [api, auto]
-          : []
-        : api
-          ? [api]
-          : [];
-    }
-    case "antigravity":
-      return exhausted.filter((window) => antigravityWindowLimitsModel(window, model));
-    case "claudeAgent":
-      return exhausted.filter((window) => claudeWindowLimitsModel(window, model));
-    case "codex": {
-      // Seat-based plans spend credits only past their plan windows, so the credit cap blocks only plans without them.
-      const hasPlanWindows = windows.some(
-        (window) => window.id === "primary" || window.id === "secondary",
-      );
-      return exhausted.filter((window) => window.id !== "individual" || !hasPlanWindows);
-    }
-    case "opencode":
-      return model === null
-        ? exhausted
-        : exhausted.filter(
-            (window) => !window.id.startsWith("go_") || model.startsWith("opencode-go/"),
-          );
-    default:
-      return exhausted;
+  if (driver === "cursor" && model !== null) {
+    const scoped = exhausted.filter((window) =>
+      usageWindowLimitsModel(driver, window, model, windows),
+    );
+    const api = scoped.find((window) => window.id === "apiPercentUsed");
+    const auto = scoped.find((window) => window.id === "autoPercentUsed");
+    return /^(auto|default|grok|composer)/.test(model)
+      ? auto && api
+        ? [api, auto]
+        : []
+      : api
+        ? [api]
+        : [];
   }
+  return driver === undefined
+    ? exhausted
+    : exhausted.filter((window) => usageWindowLimitsModel(driver, window, model, windows));
 }
 
 export function exhaustedUsageWindow(
@@ -201,20 +179,6 @@ function usageSourcesResetAt(
   return earliestNative;
 }
 
-export function usageLimitSourceResetAt(
-  sources: UsageLimitSourceSnapshots,
-  provider: ServerProvider | undefined,
-  now: number,
-  model?: string,
-): string | null {
-  if (provider === undefined) return null;
-  const { driver, hubs } = resolveInstanceHubRoutes(provider, sources, model ?? null);
-  const healthyHubs = hubs.filter((source) => !source.error);
-  const hubReset =
-    healthyHubs.length === 0 ? null : hubPoolResetAt(healthyHubs, driver, model ?? null, now);
-  return hubReset ?? usageSourcesResetAt(provider, now, model);
-}
-
 /**
  * Resolves the reset timestamp for a provider's active model without leaking local CLI limits
  * onto hub-routed instances.
@@ -228,12 +192,17 @@ export function resolveUsageLimitResetAt(
   model?: string | null,
 ): string | null {
   if (provider === undefined) return null;
-  const { driver, hubs, origins } = resolveInstanceHubRoutes(provider, sources, model ?? null);
-  if (origins.length > 0) {
-    const healthyHubs = hubs.filter((source) => !source.error);
-    return healthyHubs.length === 0
-      ? null
-      : hubPoolResetAt(healthyHubs, driver, model ?? null, now);
+  const route = resolveInstanceHubRoutes(provider, sources, model ?? null);
+  if (route.origins.length > 0) {
+    const healthyHubs = route.hubs.filter((source) => !source.error);
+    if (healthyHubs.length === 0) return null;
+    const matchesAccount = matchRoutedHubAccount(
+      route,
+      healthyHubs,
+      provider.driver,
+      model ?? null,
+    );
+    return hubPoolResetAt(healthyHubs, route.driver, model ?? null, now, matchesAccount);
   }
   return usageLimitResetAt(provider, now, model) ?? usageSourcesResetAt(provider, now, model);
 }
@@ -1317,7 +1286,7 @@ function antigravityQuotaFamily(id: string) {
 }
 
 /** Each Antigravity quota blocks only the models it meters. */
-export function antigravityWindowLimitsModel(
+function antigravityWindowLimitsModel(
   window: Pick<ServerProviderUsageWindow, "id">,
   model: string | null,
 ): boolean {
@@ -1328,15 +1297,38 @@ export function antigravityWindowLimitsModel(
   return antigravityQuotaFamily(window.id) === antigravityQuotaFamily(base);
 }
 
-/** Whether a usage window meters the given model (ignoring unrelated Claude/Antigravity buckets). */
+/** Whether a usage window meters the given model across provider-specific bucket rules. */
 export function usageWindowLimitsModel(
   driver: ServerProvider["driver"],
-  window: Pick<ServerProviderUsageWindow, "id">,
+  window: Pick<ServerProviderUsageWindow, "id" | "modelIds" | "providerIds">,
   model: string | null,
+  allWindows?: ReadonlyArray<Pick<ServerProviderUsageWindow, "id">>,
 ): boolean {
-  if (driver === "claudeAgent") return claudeWindowLimitsModel(window, model);
-  if (driver === "antigravity") return antigravityWindowLimitsModel(window, model);
-  return true;
+  if (typeof model === "string") {
+    if (window.modelIds !== undefined && !window.modelIds.includes(model)) return false;
+    if (window.providerIds !== undefined && !window.providerIds.includes(model.split("/")[0] ?? ""))
+      return false;
+  }
+  switch (driver) {
+    case "claudeAgent":
+      return claudeWindowLimitsModel(window, model);
+    case "antigravity":
+      return antigravityWindowLimitsModel(window, model);
+    case "opencode":
+      return model === null || !window.id.startsWith("go_") || model.startsWith("opencode-go/");
+    case "cursor":
+      if (model === null) return true;
+      if (window.id === "autoPercentUsed") return /^(auto|default|grok|composer)/.test(model);
+      return true;
+    case "codex": {
+      if (window.id !== "individual" || allWindows === undefined) return true;
+      return !allWindows.some(
+        (candidate) => candidate.id === "primary" || candidate.id === "secondary",
+      );
+    }
+    default:
+      return true;
+  }
 }
 
 /** Matches hub accounts for a resolved instance route, including null-model Pi routes and v8 model slugs. */
@@ -1408,10 +1400,16 @@ export function hubPoolResetAt(
   driver: ServerProvider["driver"],
   model: string | null,
   now: number,
+  matchesAccount?: (
+    account: UsageLimitSourceAccount,
+    hub?: UsageLimitSourceSnapshots[number],
+  ) => boolean,
 ): string | null {
   let earliest: number | null = null;
-  const routes = hubRoutes(sources, driver, model);
-  for (const account of sources.flatMap((source) => source.accounts).filter(routes)) {
+  const routes = matchesAccount ?? hubRoutes(sources, driver, model);
+  for (const account of sources.flatMap((source) =>
+    source.accounts.filter((entry) => routes(entry, source)),
+  )) {
     // An unread account may be the one still blocked, so its refill is unknown.
     if (account.usageLimits.unavailable) return null;
     const resetIso = usageLimitResetAt(account, now, model);
@@ -1708,7 +1706,7 @@ export function summarizeProviderLimits(
         [
           {
             key: `instance:${provider.instanceId}`,
-            driver: provider.driver,
+            driver: ownLimits.ownerDriver ?? provider.driver,
             displayName: provider.displayName?.trim() || null,
             email: provider.auth.email,
             workspaceId: provider.auth.workspaceId,

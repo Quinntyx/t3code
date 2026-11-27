@@ -23,10 +23,8 @@ export interface ConsumptionCapWindow {
 
 export interface ConsumptionCapSnapshot {
   readonly models: ReadonlyArray<ConsumptionCapModelUsage>;
-  /** Instances the worker read for this cap's quota conditions. */
-  readonly windowsByInstance: ReadonlyMap<string, ReadonlyArray<ConsumptionCapWindow>>;
   /** Model-scoped windows keyed by `capModelKey(instanceId, model)`. */
-  readonly windowsByModel?: ReadonlyMap<string, ReadonlyArray<ConsumptionCapWindow>>;
+  readonly windowsByModel: ReadonlyMap<string, ReadonlyArray<ConsumptionCapWindow>>;
   /** Active thread target used when an unscoped quota condition evaluates against `windowsByModel`. */
   readonly activeTarget?: {
     readonly providerInstanceId: ProviderInstanceId;
@@ -117,28 +115,23 @@ export function evaluateConsumptionCap(
 
     const windowLists: Array<ReadonlyArray<ConsumptionCapWindow>> =
       scope === undefined
-        ? snapshot.windowsByModel !== undefined
-          ? (() => {
-              const targetKeys = new Set<string>();
-              for (const model of snapshot.models) {
-                targetKeys.add(capModelKey(model.providerInstanceId, model.model));
-              }
-              if (snapshot.activeTarget != null) {
-                targetKeys.add(
-                  capModelKey(
-                    snapshot.activeTarget.providerInstanceId,
-                    snapshot.activeTarget.model,
-                  ),
-                );
-              }
-              return [...targetKeys].map((key) => snapshot.windowsByModel!.get(key) ?? []);
-            })()
-          : [...snapshot.windowsByInstance.values()]
+        ? (() => {
+            const targetKeys = new Set<string>();
+            for (const model of snapshot.models) {
+              targetKeys.add(capModelKey(model.providerInstanceId, model.model));
+            }
+            if (snapshot.activeTarget != null) {
+              targetKeys.add(
+                capModelKey(snapshot.activeTarget.providerInstanceId, snapshot.activeTarget.model),
+              );
+            }
+            return targetKeys.size > 0
+              ? [...targetKeys].map((key) => snapshot.windowsByModel.get(key) ?? [])
+              : [...snapshot.windowsByModel.values()];
+          })()
         : (condition.models ?? []).map(
             (entry) =>
-              snapshot.windowsByModel?.get(capModelKey(entry.providerInstanceId, entry.model)) ??
-              snapshot.windowsByInstance.get(entry.providerInstanceId) ??
-              [],
+              snapshot.windowsByModel.get(capModelKey(entry.providerInstanceId, entry.model)) ?? [],
           );
     let answered = false;
     for (const windows of windowLists) {

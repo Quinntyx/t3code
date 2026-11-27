@@ -577,5 +577,48 @@ describe("consumption cap sweep", () => {
       "thread.metadata.update",
       "thread.stop",
     ]);
+
+    // OpenCode go_* windows must not breach a non-Go OpenCode model (opencode/big-pickle).
+    const opencodeId = ProviderInstanceId.make("opencode-direct");
+    const opencodeSnapshot = {
+      instanceId: opencodeId,
+      driver: opencode,
+      auth: { status: "authenticated" },
+      usageLimits: {
+        checkedAt,
+        windows: [
+          {
+            id: "go_rolling",
+            kind: "session",
+            label: "OpenCode Go 5h",
+            usedPercent: 95,
+            resetsAt: "2099-11-04T15:00:00.000Z",
+          },
+        ],
+      },
+    } as unknown as ServerProvider;
+    const nonGoNoBreach = await runSweep({
+      candidates: [
+        {
+          ...candidate({
+            providerInstanceId: opencodeId,
+            activeRunId: runId,
+            cap: { conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }] },
+          }),
+          thread: {
+            id: threadId,
+            providerInstanceId: opencodeId,
+            modelSelection: { instanceId: opencodeId, model: "opencode/big-pickle" },
+            consumptionCap: {
+              conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }],
+            },
+            consumptionCapHit: null,
+          } as unknown as OrchestrationV2AppThread,
+        },
+      ],
+      models: [],
+      snapshots: new Map([[opencodeId, opencodeSnapshot]]),
+    });
+    expect(nonGoNoBreach).toEqual([]);
   });
 });

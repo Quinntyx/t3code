@@ -1,4 +1,4 @@
-import { describe } from "@effect/vitest";
+import { assert, describe } from "@effect/vitest";
 
 import { createOxlintRuleHarness } from "../test/utils.ts";
 
@@ -93,6 +93,49 @@ describe("t3code/no-direct-linking-open-url", () => {
 
     void RN.Linking.openURL("https://example.com");
   `,
+  );
+
+  rule.invalid(
+    "reports a Linking rename destructured from a react-native namespace",
+    `
+    import * as RN from "react-native";
+
+    const { Linking: L } = RN;
+    void L.openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports a Linking rename",
+    `
+    import { Linking } from "react-native";
+
+    const L = Linking;
+    void L.openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports a Linking rename taken from a react-native namespace",
+    `
+    import * as RN from "react-native";
+
+    const L = RN.Linking;
+    void L.openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports an aliased openURL once",
+    `
+    import { Linking } from "react-native";
+
+    const open = Linking.openURL;
+    void open("https://example.com");
+  `,
+    (output) => {
+      assert.equal(output.match(/no-direct-linking-open-url/g)?.length, 1);
+    },
   );
 
   rule.invalid(

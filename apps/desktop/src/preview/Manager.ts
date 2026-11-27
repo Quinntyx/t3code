@@ -2160,12 +2160,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const onCreated = (_event: Electron.Event, guest: Electron.WebContents) => {
       if (guest.getType() !== "webview" || guest.session !== expectedSession) return;
       app.off("web-contents-created", onCreated);
+      // The guest has the replay now; the timeout fiber must not retain its POST body.
+      runFork(Fiber.interrupt(expiryFiber));
       guestFormReplays.set(guest.id, replay);
       guest.once("destroyed", () => guestFormReplays.delete(guest.id));
     };
     app.on("web-contents-created", onCreated);
     // The guest arrives synchronously after this returns; a listener that never matched is dropped.
-    runFork(
+    const expiryFiber = runFork(
       Effect.sleep(FORM_REPLAY_CLAIM_TIMEOUT_MS).pipe(
         Effect.andThen(Effect.sync(() => app.off("web-contents-created", onCreated))),
       ),

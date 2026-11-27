@@ -125,7 +125,9 @@ export function usageLimitBlockedRun(
   const executed = latestExecutedRun(runs);
   if (executed?.status !== "failed") return null;
   const summary = threadErrorSummary(latestRootProviderFailure(executed, turnItems), sessionError);
-  return summary.lastErrorClass === "usage_limit" ? executed : null;
+  return summary.lastErrorClass === "usage_limit" && summary.lastErrorCode !== "consumption_cap"
+    ? executed
+    : null;
 }
 
 /** The run the newest upstream API overload ended, whose retry a thread recovery drives. */

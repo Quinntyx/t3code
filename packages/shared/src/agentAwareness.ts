@@ -170,8 +170,8 @@ function resolveThreadAwarenessPhaseV2(
   if (subagentRequest !== null) {
     return subagentRequest.waitsForInput === true ? "waiting_for_input" : "waiting_for_approval";
   }
-  // A stalled thread's failed run is retried by the server, so it is still working.
-  if (thread.stalled === true) return "running";
+  // A stalled thread's failed run is retried by the server, unless a consumption cap halted it.
+  if (thread.stalled === true && thread.consumptionCapHit == null) return "running";
   switch (thread.activityRunStatus ?? thread.status) {
     case "preparing":
     case "starting":

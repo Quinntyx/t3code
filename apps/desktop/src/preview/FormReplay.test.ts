@@ -28,6 +28,16 @@ describe("makeFormReplays", () => {
     replays.offer(replay, 0);
     expect(replays.claim(replay.url, session, 30_000)).toBeUndefined();
   });
+
+  it("keeps simultaneous forms to the same URL in different sessions apart", () => {
+    const replays = makeFormReplays();
+    const otherSession = {};
+    const otherReplay = { ...replay, session: otherSession };
+    replays.offer(replay, 0);
+    replays.offer(otherReplay, 0);
+    expect(replays.claim(replay.url, otherSession, 1)).toBe(otherReplay);
+    expect(replays.claim(replay.url, session, 1)).toBe(replay);
+  });
 });
 
 describe("formReplayLoadOptions", () => {

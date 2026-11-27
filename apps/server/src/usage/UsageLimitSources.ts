@@ -12,7 +12,11 @@ import {
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { hubPoolResetAt, resolveInstanceHubRoutes } from "@t3tools/shared/usageLimits";
+import {
+  hubPoolResetAt,
+  matchRoutedHubAccount,
+  resolveInstanceHubRoutes,
+} from "@t3tools/shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -363,6 +367,7 @@ export const layerResetFallback = Layer.effect(
           refreshed.driver,
           model,
           DateTime.toEpochMillis(yield* DateTime.now),
+          matchRoutedHubAccount(refreshed, healthyHubs, provider.driver, model),
         );
       }),
     };

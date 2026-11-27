@@ -50,6 +50,16 @@ export interface PullRequestStackMergeOptions extends PullRequestMergeStackInput
   readonly requireMultiLayer?: boolean | undefined;
 }
 
+export interface RestackDependentsInput extends GitRestackThreadsInput {
+  /**
+   * Runs for every candidate child before any of them is rebased, force-pushed, or handed to
+   * its agent, so one unauthorized sibling stops the whole restack untouched.
+   */
+  readonly authorizeTarget?: (
+    target: OrchestrationV2ThreadShell,
+  ) => Effect.Effect<void, GitRestackError>;
+}
+
 export class PullRequestStackService extends Context.Service<
   PullRequestStackService,
   {
@@ -62,7 +72,7 @@ export class PullRequestStackService extends Context.Service<
       merged: PullRequestService.PullRequestMergeEvent,
     ) => Effect.Effect<StackMergeReport>;
     readonly restackDependents: (
-      input: GitRestackThreadsInput,
+      input: RestackDependentsInput,
     ) => Effect.Effect<GitRestackThreadsResult, GitRestackError>;
     readonly mergeStack: (
       input: PullRequestStackMergeOptions,
@@ -649,6 +659,10 @@ export const make = Effect.gen(function* () {
         thread.branch !== parentBranch &&
         stackBase(thread) === parentBranch,
     );
+    // Authorize every sibling before touching any of them; the guard rebases and force-pushes.
+    if (input.authorizeTarget !== undefined) {
+      yield* Effect.forEach(children, input.authorizeTarget, { concurrency: 1 });
+    }
     const restacked = yield* Effect.forEach(
       children,
       (thread) =>
@@ -679,13 +693,11 @@ export const make = Effect.gen(function* () {
       repository: input.repository,
       ...(input.host === undefined ? {} : { host: input.host }),
     };
-    // Reject before any forge read or mutation; a multi-repo project has no single stack root.
+    // A multi-repo project has no single stack root, but a host-owned native stack still merges
+    // through the forge. Derived stacks reject below before mutating anything.
     const projectRoot = yield* resolveProjectRoot(input.projectId).pipe(
       Effect.mapError((cause) => stop("The project could not be read.", cause)),
     );
-    if (projectRoot.kind === "multi_repo") {
-      return yield* stop("Stack merge is not supported for multi-repo projects.");
-    }
     const target = yield* pullRequests.summary(
       { ...ref, number: input.number, allowStale: false },
       { bypassCache: true },
@@ -750,6 +762,11 @@ export const make = Effect.gen(function* () {
           `#${target.number} is in a stack its host manages; merge it from that stack.`,
         );
       }
+    }
+
+    // Only derived stacks need a single root checkout to rebase in.
+    if (projectRoot.kind === "multi_repo") {
+      return yield* stop("Stack merge is not supported for multi-repo projects.");
     }
 
     const threads = yield* projectThreads(target.projectId).pipe(

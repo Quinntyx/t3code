@@ -6,7 +6,11 @@ import {
   type ThreadConsumptionCapCondition,
 } from "@t3tools/contracts";
 
-import { type ConsumptionCapSnapshot, evaluateConsumptionCap } from "./consumptionCap.ts";
+import {
+  type ConsumptionCapSnapshot,
+  capModelKey,
+  evaluateConsumptionCap,
+} from "./consumptionCap.ts";
 
 const claude = ProviderInstanceId.make("claudeAgent");
 const codex = ProviderInstanceId.make("codex");
@@ -47,10 +51,12 @@ const quota = (
 
 const snapshot = (input: {
   readonly models?: ConsumptionCapSnapshot["models"];
-  readonly windows?: ConsumptionCapSnapshot["windowsByInstance"];
+  readonly windows?: ConsumptionCapSnapshot["windowsByModel"];
+  readonly activeTarget?: ConsumptionCapSnapshot["activeTarget"];
 }): ConsumptionCapSnapshot => ({
   models: input.models ?? [],
-  windowsByInstance: input.windows ?? new Map(),
+  windowsByModel: input.windows ?? new Map(),
+  ...(input.activeTarget === undefined ? {} : { activeTarget: input.activeTarget }),
 });
 
 const windows = (
@@ -62,7 +68,8 @@ const windows = (
     readonly usedPercent: number;
     readonly resetsAt: string | null;
   }>,
-) => new Map([[instanceId, entries]]);
+  model: string | null = null,
+) => new Map([[capModelKey(instanceId, model), entries]]);
 
 describe("consumption cap", () => {
   it("stops when the thread's priced API spend reaches a limit over every model", () => {
@@ -159,6 +166,7 @@ describe("consumption cap", () => {
       cap(spend(100), quota(80, "session"), spend(1, [codexModel])),
       snapshot({
         models: [{ providerInstanceId: codex, model: "gpt-5.4", costUsd: 1 }],
+        activeTarget: { providerInstanceId: claude, model: null },
         windows: windows(claude, [
           { id: "five-hour", kind: "session", label: "5h", usedPercent: 81, resetsAt: null },
         ]),
@@ -264,11 +272,11 @@ describe("consumption cap", () => {
       snapshot({
         windows: new Map([
           [
-            claude,
+            capModelKey(claude, claudeModel.model),
             [{ id: "c", kind: "session" as const, label: "5h", usedPercent: 10, resetsAt: null }],
           ],
           [
-            codex,
+            capModelKey(codex, codexModel.model),
             [
               {
                 id: "x",
@@ -288,9 +296,11 @@ describe("consumption cap", () => {
       evaluateConsumptionCap(
         cap(quota(50, "session", [claudeModel])),
         snapshot({
-          windows: windows(claude, [
-            { id: "c", kind: "session", label: "5h", usedPercent: 50, resetsAt: null },
-          ]),
+          windows: windows(
+            claude,
+            [{ id: "c", kind: "session", label: "5h", usedPercent: 50, resetsAt: null }],
+            claudeModel.model,
+          ),
         }),
         now,
       ).breach?.reason,

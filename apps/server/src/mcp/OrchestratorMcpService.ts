@@ -796,7 +796,8 @@ function latestTerminalResultRun(
     let id = runId;
     while (id !== undefined && !supersededRunIds.has(id)) {
       supersededRunIds.add(id);
-      id = runsById.get(id)?.restartContinuationOfRunId;
+      const current = runsById.get(id);
+      id = current?.restartContinuationOfRunId ?? current?.stallContinuationOfRunId;
     }
   };
   supersede(awaitingContinuationRun?.id);
@@ -804,8 +805,10 @@ function latestTerminalResultRun(
     if (
       !ThreadManagementService.isTerminalRunStatus(run.status) ||
       (run.status !== "rolled_back" && run.startedAt !== null)
-    )
+    ) {
       supersede(run.restartContinuationOfRunId);
+      supersede(run.stallContinuationOfRunId);
+    }
   }
   return projection.runs
     .filter(

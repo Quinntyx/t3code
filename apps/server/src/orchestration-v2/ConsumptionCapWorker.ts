@@ -122,7 +122,7 @@ const makeSweep = Effect.gen(function* () {
               );
               for (const pool of pools) {
                 for (const window of pool.windows) {
-                  if (!usageWindowLimitsModel(pool.driver, window, model)) continue;
+                  if (!usageWindowLimitsModel(pool.driver, window, model, pool.windows)) continue;
                   const nextReset = window.resets.find((reset) => reset.at > nowMs);
                   pushWindow({
                     id: `${hub.id}:${pool.driver}:${window.id}`,
@@ -140,13 +140,15 @@ const makeSweep = Effect.gen(function* () {
         } else {
           // Direct models read only the matching local usageLimits or native usageSources.
           const ownDriver = snapshot.usageLimits?.ownerDriver ?? snapshot.driver;
+          const allowNullPiLocal = snapshot.driver === "pi" && model === null;
           if (
             snapshot.usageLimits &&
             !snapshot.usageLimits.unavailable &&
-            ownDriver === route.driver
+            (allowNullPiLocal || ownDriver === route.driver)
           ) {
             for (const window of snapshot.usageLimits.windows) {
-              if (!usageWindowLimitsModel(ownDriver, window, model)) continue;
+              if (!usageWindowLimitsModel(ownDriver, window, model, snapshot.usageLimits.windows))
+                continue;
               pushWindow({
                 id: window.id,
                 kind: window.kind,
@@ -158,13 +160,15 @@ const makeSweep = Effect.gen(function* () {
           }
           const modelProvider = model?.split(/[/:]/)[0];
           const nativeSources =
-            snapshot.driver === "pi" && modelProvider !== "openai-codex"
+            snapshot.driver === "pi" && model !== null && modelProvider !== "openai-codex"
               ? []
               : (snapshot.usageSources ?? []);
           for (const source of nativeSources) {
-            if (source.driver !== route.driver || source.limits.unavailable) continue;
+            if ((!allowNullPiLocal && source.driver !== route.driver) || source.limits.unavailable)
+              continue;
             for (const window of source.limits.windows) {
-              if (!usageWindowLimitsModel(source.driver, window, model)) continue;
+              if (!usageWindowLimitsModel(source.driver, window, model, source.limits.windows))
+                continue;
               pushWindow({
                 id: `${source.id}:${window.id}`,
                 kind: window.kind,
@@ -207,7 +211,6 @@ const makeSweep = Effect.gen(function* () {
           cap,
           {
             models: usageModels,
-            windowsByInstance: new Map(),
             windowsByModel,
             activeTarget: { providerInstanceId: thread.providerInstanceId, model: threadModel },
           },
@@ -239,9 +242,10 @@ const makeSweep = Effect.gen(function* () {
         }
 
         if (activeRunId !== null || hasActiveDelegates || hasActiveBackgroundWork) {
+          const stopSuffix = hitMatches ? `:${activeRunId ?? DateTime.formatIso(now)}` : "";
           yield* threads.dispatch({
             type: "thread.stop",
-            commandId: CommandId.make(`consumption-cap-stop:${thread.id}:${hitAt}`),
+            commandId: CommandId.make(`consumption-cap-stop:${thread.id}:${hitAt}${stopSuffix}`),
             threadId: thread.id,
             reason: evaluation.breach.reason,
             consumptionCapGuard: { cap, hitAt },

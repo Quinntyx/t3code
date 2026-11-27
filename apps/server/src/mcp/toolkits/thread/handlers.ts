@@ -437,19 +437,24 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   t3_goal: writesThread((input) =>
     Effect.gen(function* () {
-      const { projection, caller } = yield* readThread(input.threadId);
+      const { projection, caller } = yield* readThread(input.threadId, ["subagents"]);
       if (projection.thread.goal == null)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "This thread has no goal.",
         });
       // The agent working on a goal reports what blocks it; only the review closes the goal.
-      if (input.action === "complete" && caller?.id === projection.thread.id)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message:
-            'A goal is closed by its review, not by the agent working on it. Report what is missing with action "blocked" instead.',
-        });
+      if (input.action === "complete" && caller !== undefined) {
+        const review = projection.subagents.some(
+          (task) => task.purpose === "goal_review" && task.childThreadId === caller.id,
+        );
+        if (!review)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              'A goal is closed by its review, not by the agent working on it. Report what is missing with action "blocked" instead.',
+          });
+      }
       return yield* dispatch(input.threadId, (common) => ({
         ...common,
         type: "thread.goal.update",

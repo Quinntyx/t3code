@@ -1,8 +1,19 @@
-import { OrchestratorMcpFailure, WorktreeMcpFailure } from "@t3tools/contracts";
+import {
+  GitRestackError,
+  OrchestratorMcpFailure,
+  type OrchestrationV2ThreadShell,
+  WorktreeMcpFailure,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Project from "../../../project/ProjectService.ts";
 import * as PullRequestStackService from "../../../pullRequest/PullRequestStackService.ts";
-import { readThread, unavailable } from "../../threadAccess.ts";
+import { assertSameLink } from "../../linkOrigin.ts";
+import {
+  assertTargetWithinLimits,
+  loadCaller,
+  readThread,
+  unavailable,
+} from "../../threadAccess.ts";
 import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -56,9 +67,37 @@ const handlers = {
           message: "This credential cannot restack worktrees.",
         });
       }
+      const caller = yield* loadCaller().pipe(
+        Effect.mapError(
+          (error) => new WorktreeMcpFailure({ code: "capability_denied", message: error.message }),
+        ),
+      );
+      if (caller.caller === undefined || caller.caller.interactionMode === "plan") {
+        return yield* new WorktreeMcpFailure({
+          code: "capability_denied",
+          message: "A plan-mode thread cannot restack worktrees.",
+        });
+      }
       const stacks = yield* PullRequestStackService.PullRequestStackService;
+      const authorizeTarget = Effect.fn("t3_worktree_restack.authorizeTarget")(function* (
+        target: OrchestrationV2ThreadShell,
+      ) {
+        yield* Effect.suspend(() => assertTargetWithinLimits(caller.limits, target)).pipe(
+          Effect.mapError(
+            (error) => new GitRestackError({ threadId: target.id, detail: error.message }),
+          ),
+        );
+        yield* Effect.suspend(() => assertSameLink(caller, target)).pipe(
+          Effect.mapError(
+            (error) => new GitRestackError({ threadId: target.id, detail: error.message }),
+          ),
+        );
+      });
       return yield* stacks
-        .restackDependents({ threadId: scope.thread.threadId })
+        .restackDependents({
+          threadId: scope.thread.threadId,
+          authorizeTarget,
+        })
         .pipe(
           Effect.mapError(
             (error) => new WorktreeMcpFailure({ code: "operation_failed", message: error.detail }),

@@ -4976,8 +4976,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         !Number.isFinite(resetMs) ||
         thread.archivedAt !== null ||
+        thread.consumptionCapHit != null ||
         run?.id !== command.limitRecovery.runId ||
         failure?.class !== "usage_limit" ||
+        failure.code === "consumption_cap" ||
         failure.resetAt !== command.limitRecovery.resetAt ||
         resetMs <= DateTime.toEpochMillis(run.completedAt ?? run.requestedAt) ||
         projection.runtimeRequests.some((request) => request.status === "pending")
@@ -5017,6 +5019,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         run === null ||
         thread.archivedAt !== null ||
+        thread.consumptionCapHit != null ||
         thread.settledOverride === "settled" ||
         projection.runtimeRequests.some((request) => request.status === "pending")
       ) {
@@ -5150,6 +5153,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} has no goal to update.`,
       });
     }
+    const switchesToNativeGoal =
+      (command.type === "thread.model-selection.set" || command.type === "provider.switch") &&
+      thread.goal != null &&
+      (yield* goalDriverFor(command, command.modelSelection.instanceId)) !== undefined;
     const updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
         case "thread.archive":
@@ -5745,6 +5752,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             providerInstanceId: command.modelSelection.instanceId,
             modelSelection: command.modelSelection,
+            ...(switchesToNativeGoal ? { goal: null } : {}),
             updatedAt: now,
           };
       }
@@ -7438,6 +7446,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               command.manualContinuationOfRunId,
               command.restartContinuationOfRunId,
               command.usageLimitContinuationOfRunId,
+              command.stallContinuationOfRunId,
               command.steerFollowUpOfRunId,
               ...(command.dispatchMode.type === "steer_active" ||
               command.dispatchMode.type === "restart_active"
@@ -7555,7 +7564,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
         failure?.class !== "usage_limit" ||
+        failure.code === "consumption_cap" ||
         shell.lastErrorClass !== "usage_limit" ||
+        projection.thread.consumptionCapHit != null ||
         agentsWaiting ||
         !recovery?.autoResume ||
         recovery.requestId !== command.usageLimitRecoveryRequestId ||
@@ -7575,9 +7586,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           recovery.runId === command.usageLimitContinuationOfRunId &&
           ((projection.thread.snoozedUntil != null &&
             DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)) ||
-            ((agentsWaiting || hasPendingRuntimeRequest) &&
+            ((agentsWaiting ||
+              hasPendingRuntimeRequest ||
+              projection.thread.consumptionCapHit != null) &&
               run?.id === command.usageLimitContinuationOfRunId &&
               failure?.class === "usage_limit" &&
+              failure.code !== "consumption_cap" &&
               recovery.resetAt === failure.resetAt &&
               shell.lastErrorClass === "usage_limit" &&
               projection.thread.archivedAt === null &&
@@ -7638,6 +7652,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.thread.archivedAt !== null ||
+        projection.thread.consumptionCapHit != null ||
         projection.thread.settledOverride === "settled" ||
         (yield* delegatedParentAbandoned(command, projection.thread))
       ) {

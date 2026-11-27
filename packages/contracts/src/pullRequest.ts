@@ -866,6 +866,8 @@ export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 export const PullRequestMergeStackInput = Schema.Struct({
   ...PullRequestRef.fields,
   mergeMethod: Schema.optional(PullRequestMergeMethod),
+  /** Refuses when this pull request's head moved before the stack merges. */
+  expectedHeadSha: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestMergeStackInput = typeof PullRequestMergeStackInput.Type;
 

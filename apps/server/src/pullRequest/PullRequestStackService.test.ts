@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  GitRestackError,
   ProjectId,
   ProviderInstanceId,
   PullRequestOperationError,
@@ -506,6 +507,34 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
     }),
   );
 
+  it.effect("authorizes every stacked sibling before restacking any of them", () =>
+    Effect.gen(function* () {
+      const { root, worktrees } = yield* makeRepository;
+      yield* commit(worktrees.b, "b2.txt", "more b work");
+      const headBefore = yield* git(worktrees.c, ["rev-parse", "HEAD"]);
+      const threads = [
+        thread("b", { branch: "b", baseBranch: "a", worktreePath: worktrees.b }),
+        thread("c", { branch: "c", baseBranch: "b", worktreePath: worktrees.c }),
+      ];
+      const harness = yield* makeService({ root, threads, summaries: [] });
+      const authorized: string[] = [];
+
+      const error = yield* harness.service
+        .restackDependents({
+          threadId: ThreadId.make("b"),
+          authorizeTarget: (target) => {
+            authorized.push(target.id);
+            return Effect.fail(new GitRestackError({ threadId: target.id, detail: "not allowed" }));
+          },
+        })
+        .pipe(Effect.flip);
+
+      assert.deepStrictEqual(authorized, ["c"]);
+      assert.include(error.message, "not allowed");
+      assert.equal(yield* git(worktrees.c, ["rev-parse", "HEAD"]), headBefore);
+    }),
+  );
+
   describe("merging up to a pull request", () => {
     const attachOrigin = (root: string, worktrees: { readonly b: string; readonly c: string }) =>
       Effect.gen(function* () {
@@ -769,7 +798,8 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
           { number: 3, expectedHeadSha: fullHead },
         ]);
 
-        // Multi-repo projects reject mergeStack BEFORE mutating the forge (layer 1 stays unmerged).
+        // Derived stacks in multi-repo projects reject before mutating the forge; the summary
+        // read is only how the merge learns the PR has no host-managed stack.
         const multiRepo = yield* makeService({
           root,
           trackedFolders: [{ id: "repo-a", name: "a", path: `${root}/a` }],
@@ -784,9 +814,11 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
           .pipe(Effect.flip);
         assert.include(multiRepoErr.message, "not supported for multi-repo projects");
         assert.deepStrictEqual(multiRepo.merges, []);
-        assert.deepStrictEqual(multiRepo.summaryReads, []);
+        assert.deepStrictEqual(multiRepo.summaryReads, [2]);
+        assert.deepStrictEqual(multiRepo.nativeStackSupportReads, [2]);
+        assert.deepStrictEqual(multiRepo.nativeStackReads, []);
 
-        // Neither native-stack path reaches the host either: no summary, stack, or merge call.
+        // A host-owned native stack still merges through the forge in a multi-repo project.
         const multiRepoNative = yield* makeService({
           root,
           trackedFolders: [{ id: "repo-a", name: "a", path: `${root}/a` }],
@@ -801,14 +833,23 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
             layers: [{ number: 2, state: "open", headBranch: "b", headSha: "22222222" }],
           }),
         });
-        const multiRepoNativeErr = yield* multiRepoNative.service
-          .mergeStack({ projectId: PROJECT_ID, repository: REPOSITORY, number: 2 })
-          .pipe(Effect.flip);
-        assert.include(multiRepoNativeErr.message, "not supported for multi-repo projects");
-        assert.deepStrictEqual(multiRepoNative.summaryReads, []);
-        assert.deepStrictEqual(multiRepoNative.nativeStackSupportReads, []);
-        assert.deepStrictEqual(multiRepoNative.nativeStackReads, []);
-        assert.deepStrictEqual(multiRepoNative.nativeStackMerges, []);
+        assert.deepStrictEqual(
+          yield* multiRepoNative.service.mergeStack({
+            projectId: PROJECT_ID,
+            repository: REPOSITORY,
+            number: 2,
+          }),
+          { merged: [2] },
+        );
+        assert.deepStrictEqual(multiRepoNative.nativeStackMerges, [
+          {
+            number: 2,
+            stackNumber: 9,
+            expectedStackHeads: [{ number: 2, headSha: "22222222" }],
+          },
+        ]);
+        assert.deepStrictEqual(multiRepoNative.merges, []);
+        assert.deepStrictEqual(multiRepoNative.summaryReads, [2]);
 
         const multiRepoStacked = yield* makeService({
           root,
@@ -829,13 +870,17 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
             layers: [{ number: 2, state: "open", headBranch: "b", headSha: "22222222" }],
           }),
         });
-        const multiRepoStackedErr = yield* multiRepoStacked.service
-          .mergeStack({ projectId: PROJECT_ID, repository: REPOSITORY, number: 2 })
-          .pipe(Effect.flip);
-        assert.include(multiRepoStackedErr.message, "not supported for multi-repo projects");
-        assert.deepStrictEqual(multiRepoStacked.summaryReads, []);
-        assert.deepStrictEqual(multiRepoStacked.nativeStackReads, []);
-        assert.deepStrictEqual(multiRepoStacked.merges, []);
+        assert.deepStrictEqual(
+          yield* multiRepoStacked.service.mergeStack({
+            projectId: PROJECT_ID,
+            repository: REPOSITORY,
+            number: 2,
+          }),
+          { merged: [2] },
+        );
+        assert.deepStrictEqual(multiRepoStacked.summaryReads, [2]);
+        assert.deepStrictEqual(multiRepoStacked.nativeStackReads, [2]);
+        assert.deepStrictEqual(multiRepoStacked.merges, [2]);
       }),
     );
 

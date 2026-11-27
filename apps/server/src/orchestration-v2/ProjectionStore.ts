@@ -2063,7 +2063,9 @@ export function threadShellFromProjection(
   }
   const latestUserMessage = userMessages[0] ?? null;
   // The latest executed run decides, so a cancelled run that never started cannot hide a stall.
-  const stalled = stalledRun(runs, projection.turnItems) !== null;
+  // A consumption cap stops retries, so a capped thread is no longer stalled.
+  const stalled =
+    projection.thread.consumptionCapHit == null && stalledRun(runs, projection.turnItems) !== null;
   const pendingBackgroundTasks = derivePendingBackgroundWork({
     latestRun,
     providerThreads: projection.providerThreads,
@@ -8956,8 +8958,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ) AS latest_run_stop_requested,
               ${isBackgroundWakeShellRun("presented")} AS latest_run_background_wake,
               -- stalledRun: the latest executed run's newest root error is an upstream overload,
-              -- and no Stop reached it.
-              (
+              -- and no Stop or consumption cap reached it.
+              CASE WHEN json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL THEN 0 ELSE (
                 SELECT CASE WHEN EXISTS (
                   SELECT 1 FROM orchestration_v2_projection_turn_items stopped
                   WHERE stopped.thread_id = t.thread_id AND stopped.run_id = executed.run_id
@@ -8993,7 +8995,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
                     LIMIT 1
                   ), '$.failure.class') IS NOT 'usage_limit'
-              ) AS stalled,
+              ) END AS stalled,
               active.run_id AS active_run_id,
               active.status AS active_run_status,
               (
@@ -9423,7 +9425,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS latest_user_authored_message_at,
               -- stalledRun, over the latest executed run rather than the presented one.
-              (
+              CASE WHEN json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL THEN 0 ELSE (
                 SELECT CASE WHEN EXISTS (
                   SELECT 1 FROM orchestration_v2_projection_turn_items stopped
                   WHERE stopped.thread_id = t.thread_id AND stopped.run_id = executed.run_id
@@ -9460,7 +9462,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
                     LIMIT 1
                   ), '$.failure.class') IS NOT 'usage_limit'
-              ) AS stalled
+              ) END AS stalled
             FROM orchestration_v2_projection_threads t
             LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = (
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest

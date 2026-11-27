@@ -1119,6 +1119,8 @@ export default function ChatView(props: ChatViewProps) {
   const stalled = activeThreadShell?.runtime?.stalled === true;
   const timelineThreadError =
     (limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError) ||
+    (activeThreadShell?.consumptionCapHit != null &&
+      visibleThreadError === serverRuntime?.lastError) ||
     (stalled && visibleThreadError === serverRuntime?.lastError)
       ? null
       : visibleThreadError;
@@ -2794,22 +2796,25 @@ export default function ChatView(props: ChatViewProps) {
   });
   const stallRecoveryBanner =
     stalled && activeThreadShell !== null
-      ? stallRecoveryBannerItem({
-          threadId: activeThreadShell.id,
-          nextAttemptAt: activeThreadShell.runtime?.stallNextAttemptAt ?? null,
-          requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
-          timestampFormat,
-          onAction: async (action) => {
-            const result = await updateThreadMetadata({
-              environmentId,
-              input: {
-                threadId: activeThreadShell.id,
-                ...(action === "stop" ? { stallRecovery: null } : { stallRetryNow: true }),
-              },
-            });
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      ? stallRecoveryBannerItem(
+          {
+            threadId: activeThreadShell.id,
+            nextAttemptAt: activeThreadShell.runtime?.stallNextAttemptAt ?? null,
+            requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+            timestampFormat,
+            onAction: async (action) => {
+              const result = await updateThreadMetadata({
+                environmentId,
+                input: {
+                  threadId: activeThreadShell.id,
+                  ...(action === "stop" ? { stallRecovery: null } : { stallRetryNow: true }),
+                },
+              });
+              if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+            },
           },
-        })
+          messages,
+        )
       : null;
   // A cap hit is written by a sweep, so it lands without a failed run to recover.
   const consumptionCapHit = activeThreadShell?.consumptionCapHit ?? null;
