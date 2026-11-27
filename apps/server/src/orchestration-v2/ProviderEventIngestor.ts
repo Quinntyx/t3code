@@ -281,9 +281,7 @@ export const layer: Layer.Layer<
       if (resolveInstanceHubRoutes(normalized, [], model).origins.length > 0) {
         return usageLimitResets.resetAt(normalized, model);
       }
-      const local = resolveUsageLimitResetAt([], normalized, now, model);
-      if (local !== null) return Effect.succeed(local);
-      return usageLimitResets.resetAt(normalized, model);
+      return Effect.succeed(resolveUsageLimitResetAt([], normalized, now, model));
     };
 
     const makeDomainEvent =

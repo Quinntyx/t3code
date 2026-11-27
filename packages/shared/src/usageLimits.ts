@@ -1,5 +1,5 @@
 import {
-  type EnvironmentId,
+  EnvironmentId,
   type ModelSelection,
   type ServerSettings,
   type ProjectId,
@@ -149,21 +149,143 @@ function quotaDriverForModel(
   return driver;
 }
 
-function usageSourcesResetAt(
-  provider: Pick<ServerProvider, "driver" | "usageSources"> | undefined,
+type UsageTargetProvider = Pick<ServerProvider, "driver" | "auth" | "usageRoutes"> &
+  Partial<Pick<ServerProvider, "usageLimits" | "usageSources">>;
+
+/** Filters a limit snapshot's windows to those that meter `model`. */
+export function filterUsageLimitsForModel(
+  driver: ServerProvider["driver"],
+  limits: ServerProviderUsageLimits,
+  model: string | null,
+): ServerProviderUsageLimits {
+  if (limits.windows.length === 0) return limits;
+  const effectiveDriver = limits.ownerDriver ?? driver;
+  const windows = limits.windows.filter((window) =>
+    usageWindowLimitsModel(effectiveDriver, window, model, limits.windows),
+  );
+  return windows.length === limits.windows.length ? limits : { ...limits, windows };
+}
+
+type ProviderUsageTarget =
+  | {
+      readonly kind: "hub";
+      readonly route: ReturnType<typeof resolveInstanceHubRoutes>;
+      /** Healthy routed hubs, narrowed to matched accounts with model-filtered windows. */
+      readonly hubs: UsageLimitSourceSnapshots;
+      readonly accounts: readonly UsageLimitSourceAccount[];
+      readonly readableAccounts: readonly UsageLimitSourceAccount[];
+    }
+  | {
+      readonly kind: "local";
+      readonly route: ReturnType<typeof resolveInstanceHubRoutes>;
+      /** True when the instance names a custom endpoint or route that matched no configured hub. */
+      readonly unmatchedEndpoint: boolean;
+      readonly ownLimits: ServerProviderUsageLimits | null;
+      readonly nativeSources: readonly ServerProviderUsageSource[];
+    }
+  | {
+      /** A Pi hub-prefixed model with no configured hub route must not leak local CLI limits. */
+      readonly kind: "none";
+      readonly route: ReturnType<typeof resolveInstanceHubRoutes>;
+    };
+
+/**
+ * Canonical model-aware usage target resolution for one provider instance: resolves whether
+ * a turn spends a routed hub pool, local instance limits/usageSources, or nothing.
+ */
+export function resolveProviderUsageTarget(
+  sources: UsageLimitSourceSnapshots,
+  provider: UsageTargetProvider,
+  model: string | null,
+): ProviderUsageTarget {
+  const route = resolveInstanceHubRoutes(provider, sources, model);
+  const modelProvider = model?.split(/[/:]/)[0];
+  const piHubModel = provider.driver === "pi" && isPiHubModelProvider(modelProvider);
+  if (route.hubs.length > 0) {
+    const healthyHubs = route.hubs.filter((source) => !source.error);
+    const matchesAccount = matchRoutedHubAccount(route, healthyHubs, provider.driver, model);
+    const hubs = healthyHubs.map((source) => ({
+      ...source,
+      accounts: source.accounts
+        .filter((account) => matchesAccount(account, source))
+        .map((account) => ({
+          ...account,
+          usageLimits: filterUsageLimitsForModel(account.driver, account.usageLimits, model),
+        })),
+    }));
+    const accounts = hubs.flatMap((source) => source.accounts);
+    const readableAccounts = accounts.filter(
+      (account) => limitsNotice(account.usageLimits) === null,
+    );
+    return { kind: "hub", route, hubs, accounts, readableAccounts };
+  }
+  if (piHubModel) {
+    return { kind: "none", route };
+  }
+  const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
+  const ownLimits =
+    provider.usageLimits !== undefined && ownDriver === route.driver ? provider.usageLimits : null;
+  const nativeSources = (provider.usageSources ?? []).filter((source) => {
+    const sourceDriver = source.limits.ownerDriver ?? source.driver;
+    if (sourceDriver !== route.driver) return false;
+    // On Pi, a ChatGPT (`codex`) OAuth source only meters `openai-codex/*` models, not direct API keys.
+    return (
+      provider.driver !== "pi" ||
+      sourceDriver !== "codex" ||
+      model === null ||
+      modelProvider === "openai-codex"
+    );
+  });
+  return {
+    kind: "local",
+    route,
+    unmatchedEndpoint: route.origins.length > 0,
+    ownLimits,
+    nativeSources,
+  };
+}
+
+function earliestHubAccountResetAt(
+  accounts: readonly UsageLimitSourceAccount[],
+  now: number,
+  model: string | null,
+): string | null {
+  let earliest: number | null = null;
+  for (const account of accounts) {
+    // An unread account may be the one still blocked, so its refill is unknown.
+    if (account.usageLimits.unavailable) return null;
+    const resetIso = usageLimitResetAt(account, now, model);
+    if (resetIso === null) return null;
+    const recoversAt = Date.parse(resetIso);
+    if (!Number.isFinite(recoversAt) || recoversAt <= now) return null;
+    earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+  }
+  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
+}
+
+/**
+ * Resolves the reset timestamp for a provider's active model without leaking local CLI limits
+ * onto hub-routed instances.
+ */
+export function resolveUsageLimitResetAt(
+  sources: UsageLimitSourceSnapshots,
+  provider: UsageTargetProvider | undefined,
   now: number,
   model?: string | null,
 ): string | null {
   if (provider === undefined) return null;
-  const quotaDriver = quotaDriverForModel(provider.driver, model);
-  const modelProvider = model?.split(/[/:]/)[0];
-  const nativeSources =
-    provider.driver === "pi" && modelProvider !== "openai-codex"
-      ? []
-      : (provider.usageSources ?? []);
+  const target = resolveProviderUsageTarget(sources, provider, model ?? null);
+  if (target.kind === "hub") {
+    return earliestHubAccountResetAt(target.accounts, now, model ?? null);
+  }
+  if (target.kind === "none" || target.unmatchedEndpoint) return null;
+  const ownReset =
+    target.ownLimits === null
+      ? null
+      : usageLimitResetAt({ driver: provider.driver, usageLimits: target.ownLimits }, now, model);
+  if (ownReset !== null) return ownReset;
   let earliestNative: string | null = null;
-  for (const source of nativeSources) {
-    if (source.driver !== quotaDriver) continue;
+  for (const source of target.nativeSources) {
     const resetAt = usageLimitResetAt(
       { driver: source.driver, usageLimits: source.limits },
       now,
@@ -179,32 +301,79 @@ function usageSourcesResetAt(
   return earliestNative;
 }
 
+const POOLED_LIMITS_ENVIRONMENT = EnvironmentId.make("routed-hub-pool");
+
 /**
- * Resolves the reset timestamp for a provider's active model without leaking local CLI limits
- * onto hub-routed instances.
+ * Resolves the merged limit pool for a hub-routed provider instance and model, including fresher
+ * readings from matching local logins with the same model-window filter applied before merging.
  */
-export function resolveUsageLimitResetAt(
-  sources: UsageLimitSourceSnapshots,
-  provider:
-    | Pick<ServerProvider, "driver" | "auth" | "usageLimits" | "usageSources" | "usageRoutes">
-    | undefined,
-  now: number,
-  model?: string | null,
-): string | null {
-  if (provider === undefined) return null;
-  const route = resolveInstanceHubRoutes(provider, sources, model ?? null);
-  if (route.origins.length > 0) {
-    const healthyHubs = route.hubs.filter((source) => !source.error);
-    if (healthyHubs.length === 0) return null;
-    const matchesAccount = matchRoutedHubAccount(
-      route,
-      healthyHubs,
-      provider.driver,
-      model ?? null,
-    );
-    return hubPoolResetAt(healthyHubs, route.driver, model ?? null, now, matchesAccount);
+export function resolveRoutedHubLimitPool(input: {
+  readonly provider: ServerProvider;
+  readonly model: string | null;
+  readonly providers: readonly ServerProvider[];
+  readonly sources: UsageLimitSourceSnapshots;
+  readonly now: number;
+}): {
+  readonly windows: readonly LimitPoolWindow[];
+  readonly amounts: readonly LimitPoolAmount[];
+} | null {
+  const target = resolveProviderUsageTarget(input.sources, input.provider, input.model);
+  if (target.kind !== "hub" || target.readableAccounts.length === 0) return null;
+
+  const resolveKey = accountKeyResolver([
+    ...input.providers.filter((candidate) => candidate.enabled).map(nativeReport),
+    ...input.providers.flatMap((candidate) =>
+      (candidate.usageSources ?? []).map(usageSourceReport),
+    ),
+    ...target.readableAccounts,
+  ]);
+  const routedKeys = new Set(
+    target.readableAccounts.flatMap((account) => {
+      const key = resolveKey(account);
+      return key === null ? [] : [key];
+    }),
+  );
+
+  // A signed-in login joins the pool only as a fresher reading of an account the hub routes to;
+  // filter its windows for `model` too so fresher local readings never reintroduce excluded windows.
+  const signedIn: ServerProvider[] = [];
+  for (const candidate of input.providers) {
+    const ownKey = candidate.usageLimits !== undefined ? resolveKey(nativeReport(candidate)) : null;
+    const filteredOwn =
+      ownKey !== null && routedKeys.has(ownKey) && candidate.usageLimits !== undefined
+        ? filterUsageLimitsForModel(candidate.driver, candidate.usageLimits, input.model)
+        : undefined;
+    const keepOwn = filteredOwn !== undefined && limitsNotice(filteredOwn) === null;
+    const matchingSources = (candidate.usageSources ?? []).flatMap((source) => {
+      const key = resolveKey(usageSourceReport(source));
+      if (key === null || !routedKeys.has(key)) return [];
+      const filtered = filterUsageLimitsForModel(source.driver, source.limits, input.model);
+      return limitsNotice(filtered) === null ? [{ ...source, limits: filtered }] : [];
+    });
+    if (!keepOwn && matchingSources.length === 0) continue;
+    signedIn.push({
+      ...candidate,
+      usageLimits: keepOwn ? filteredOwn : undefined,
+      usageSources: matchingSources,
+    });
   }
-  return usageLimitResetAt(provider, now, model) ?? usageSourcesResetAt(provider, now, model);
+
+  const presentations = new Map([
+    [
+      POOLED_LIMITS_ENVIRONMENT,
+      {
+        entry: { target: { label: "" } },
+        serverConfig: { providers: signedIn, usageLimitSources: target.hubs },
+      },
+    ],
+  ]);
+  const pools = collectLimitPools(collectLimitAccounts(presentations), input.now);
+  return pools.length > 0
+    ? {
+        windows: pools.flatMap(displayLimitWindows),
+        amounts: pools.flatMap((pool) => pool.amounts),
+      }
+    : null;
 }
 
 export function resolveNewThreadModelSelection(input: {
@@ -1298,7 +1467,7 @@ function antigravityWindowLimitsModel(
 }
 
 /** Whether a usage window meters the given model across provider-specific bucket rules. */
-export function usageWindowLimitsModel(
+function usageWindowLimitsModel(
   driver: ServerProvider["driver"],
   window: Pick<ServerProviderUsageWindow, "id" | "modelIds" | "providerIds">,
   model: string | null,
@@ -1332,7 +1501,7 @@ export function usageWindowLimitsModel(
 }
 
 /** Matches hub accounts for a resolved instance route, including null-model Pi routes and v8 model slugs. */
-export function matchRoutedHubAccount(
+function matchRoutedHubAccount(
   route: Pick<ReturnType<typeof resolveInstanceHubRoutes>, "driver" | "driversByOrigin">,
   hubs: UsageLimitSourceSnapshots,
   providerDriver: ServerProvider["driver"],
@@ -1405,20 +1574,11 @@ export function hubPoolResetAt(
     hub?: UsageLimitSourceSnapshots[number],
   ) => boolean,
 ): string | null {
-  let earliest: number | null = null;
   const routes = matchesAccount ?? hubRoutes(sources, driver, model);
-  for (const account of sources.flatMap((source) =>
+  const matched = sources.flatMap((source) =>
     source.accounts.filter((entry) => routes(entry, source)),
-  )) {
-    // An unread account may be the one still blocked, so its refill is unknown.
-    if (account.usageLimits.unavailable) return null;
-    const resetIso = usageLimitResetAt(account, now, model);
-    if (resetIso === null) return null;
-    const recoversAt = Date.parse(resetIso);
-    if (!Number.isFinite(recoversAt) || recoversAt <= now) return null;
-    earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
-  }
-  return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
+  );
+  return earliestHubAccountResetAt(matched, now, model);
 }
 
 export function collectProviderUsageLimits(

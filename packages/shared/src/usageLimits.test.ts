@@ -2062,7 +2062,7 @@ describe("hub routing and pool resets", () => {
         },
         {
           id: "codex.json",
-          driver: codex,
+          driver: ProviderDriverKind.make("codex"),
           usageLimits: { checkedAt, windows: [spentWindow] },
         },
       ],
@@ -2153,7 +2153,7 @@ describe("hub routing and pool resets", () => {
         {
           id: "chatgpt",
           label: "ChatGPT",
-          driver: codex,
+          driver: ProviderDriverKind.make("codex"),
           limits: {
             checkedAt,
             windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 30 }],
@@ -2197,7 +2197,7 @@ describe("hub routing and pool resets", () => {
         {
           id: "chatgpt",
           label: "ChatGPT",
-          driver: codex,
+          driver: ProviderDriverKind.make("codex"),
           limits: {
             checkedAt,
             windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 25 }],
@@ -2217,7 +2217,7 @@ describe("hub routing and pool resets", () => {
         {
           id: "chatgpt",
           label: "ChatGPT",
-          driver: codex,
+          driver: ProviderDriverKind.make("codex"),
           limits: {
             checkedAt,
             windows: [spentWindow],
@@ -2405,5 +2405,24 @@ describe("hub routing and pool resets", () => {
       null,
     );
     expect(nullModelReport?.accounts.some((account) => account.driver === claude)).toBe(true);
+
+    // Pi ChatGPT usageSource resolves resets for openai-codex/* models, never for direct openai/* API keys.
+    const piWithCodexSource: ServerProvider = {
+      ...piOpenCode,
+      usageLimits: undefined,
+      usageRoutes: [],
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: ProviderDriverKind.make("codex"),
+          limits: { checkedAt, windows: [spentWindow] },
+        },
+      ],
+    };
+    expect(resolveUsageLimitResetAt([], piWithCodexSource, now, "openai-codex/gpt-5.4")).toBe(
+      "2026-09-03T14:00:00.000Z",
+    );
+    expect(resolveUsageLimitResetAt([], piWithCodexSource, now, "openai/gpt-5.4")).toBeNull();
   });
 });

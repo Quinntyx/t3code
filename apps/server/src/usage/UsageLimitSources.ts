@@ -14,8 +14,8 @@ import {
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
   hubPoolResetAt,
-  matchRoutedHubAccount,
   resolveInstanceHubRoutes,
+  resolveUsageLimitResetAt,
 } from "@t3tools/shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -353,21 +353,16 @@ export const layerResetFallback = Layer.effect(
     return {
       resetAt: Effect.fn("UsageLimitResetFallback.resetAt")(function* (provider, model) {
         // Only the hubs routed for this provider and model serve its turns.
-        const matched = Effect.map(sources.current, (current) =>
-          resolveInstanceHubRoutes(provider, current, model),
-        );
-        if ((yield* matched).hubs.length === 0) return null;
+        if (resolveInstanceHubRoutes(provider, yield* sources.current, model).hubs.length === 0) {
+          return null;
+        }
         // The pool usually ran out after the last poll, so the cached accounts still show room.
         yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
-        const refreshed = yield* matched;
-        const healthyHubs = refreshed.hubs.filter((source) => !source.error);
-        if (healthyHubs.length === 0) return null;
-        return hubPoolResetAt(
-          healthyHubs,
-          refreshed.driver,
-          model,
+        return resolveUsageLimitResetAt(
+          yield* sources.current,
+          provider,
           DateTime.toEpochMillis(yield* DateTime.now),
-          matchRoutedHubAccount(refreshed, healthyHubs, provider.driver, model),
+          model,
         );
       }),
     };

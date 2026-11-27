@@ -1,21 +1,16 @@
 import {
-  EnvironmentId,
   type ProviderInstanceId,
   type ServerProvider,
   type ServerProviderUsageLimits,
   type UsageLimitSourceSnapshots,
 } from "@t3tools/contracts";
 import {
-  collectLimitAccounts,
-  collectLimitPools,
   collectProviderUsageLimits,
-  displayLimitWindows,
-  isPiHubModelProvider,
+  filterUsageLimitsForModel,
   type LimitPoolAmount,
   type LimitPoolWindow,
-  matchRoutedHubAccount,
-  resolveInstanceHubRoutes,
-  usageWindowLimitsModel,
+  resolveProviderUsageTarget,
+  resolveRoutedHubLimitPool,
 } from "@t3tools/shared/usageLimits";
 import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
 
@@ -27,9 +22,6 @@ export type ThreadDetailsLimits =
       readonly amounts: readonly LimitPoolAmount[];
     };
 
-// collectLimitAccounts keys its input by environment; the card reads one, so any id serves.
-const CARD_ENVIRONMENT = EnvironmentId.make("thread-details");
-
 export function resolveThreadDetailsLimits(
   providerInstanceId: ProviderInstanceId | null,
   model: string | null,
@@ -39,31 +31,29 @@ export function resolveThreadDetailsLimits(
 ): ThreadDetailsLimits | null {
   const provider = providers.find((entry) => entry.instanceId === providerInstanceId);
   if (!provider) return null;
-  const route = resolveInstanceHubRoutes(provider, sources, model);
-  const { driver: quotaDriver, hubs } = route;
-  const modelProvider = model?.split(/[/:]/)[0];
-  const piHubModel = provider.driver === "pi" && isPiHubModelProvider(modelProvider);
-  if (hubs.length > 0) {
-    // An instance routed to a hub spends that hub's pool for the selected model; never fall back
-    // to an unrelated local CLI login when the hub pool is unreadable or empty.
-    const healthyHubs = hubs.filter((source) => !source.error);
-    return healthyHubs.length === 0
-      ? null
-      : hubPool(route, provider.driver, model, providers, healthyHubs, now);
+  const target = resolveProviderUsageTarget(sources, provider, model);
+  if (target.kind === "hub") {
+    const pool = resolveRoutedHubLimitPool({ provider, model, providers, sources, now });
+    return pool ? { kind: "pool", ...pool } : null;
   }
-  if (piHubModel) {
-    // Offline or unconfigured CLIProxyAPI hub on Pi must not display unrelated local limits.
-    return null;
+  if (target.kind === "none") return null;
+
+  if (target.ownLimits && limitsNotice(target.ownLimits) === null) {
+    const filtered = filterUsageLimitsForModel(provider.driver, target.ownLimits, model);
+    if (limitsNotice(filtered) === null) {
+      return { kind: "instance", limits: filtered };
+    }
   }
-  const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
-  if (
-    provider.usageLimits &&
-    limitsNotice(provider.usageLimits) === null &&
-    ownDriver === quotaDriver
-  ) {
-    return { kind: "instance", limits: provider.usageLimits };
+  for (const source of target.nativeSources) {
+    if (limitsNotice(source.limits) !== null) continue;
+    const filtered = filterUsageLimitsForModel(source.driver, source.limits, model);
+    if (limitsNotice(filtered) === null) {
+      return { kind: "instance", limits: filtered };
+    }
   }
+
   const report = collectProviderUsageLimits(provider.instanceId, providers, sources, now, model);
+  const quotaDriver = target.route.driver;
   // Only this instance's data: the report keeps one instance per login, and any other entry may be
   // a different login or workspace, so prefer a usable entry matching the selected model's driver.
   const ownEntries =
@@ -74,9 +64,7 @@ export function resolveThreadDetailsLimits(
     ownEntries.find((entry) => entry.driver === quotaDriver)?.limits ??
     null;
   if (matchingOwn) return { kind: "instance", limits: matchingOwn };
-  return provider.usageLimits && ownDriver === quotaDriver
-    ? { kind: "instance", limits: provider.usageLimits }
-    : null;
+  return target.ownLimits ? { kind: "instance", limits: target.ownLimits } : null;
 }
 
 export function nextPoolReset(window: LimitPoolWindow, now: number) {
@@ -84,88 +72,6 @@ export function nextPoolReset(window: LimitPoolWindow, now: number) {
   return (
     window.resets.find((reset) => reset.at > now && (!pooled || reset.restoresPercent > 0)) ?? null
   );
-}
-
-function hubPool(
-  route: ReturnType<typeof resolveInstanceHubRoutes>,
-  providerDriver: ServerProvider["driver"],
-  model: string | null,
-  providers: readonly ServerProvider[],
-  sources: UsageLimitSourceSnapshots,
-  now: number,
-): ThreadDetailsLimits | null {
-  const routes = matchRoutedHubAccount(route, sources, providerDriver, model);
-  const routed = sources.map((source) => ({
-    ...source,
-    accounts: source.accounts
-      .filter((account) => routes(account, source))
-      .map((account) => ({
-        ...account,
-        usageLimits: {
-          ...account.usageLimits,
-          windows: account.usageLimits.windows.filter((window) =>
-            usageWindowLimitsModel(account.driver, window, model, account.usageLimits.windows),
-          ),
-        },
-      })),
-  }));
-  const readable = routed
-    .flatMap((source) => source.accounts)
-    .filter((account) => limitsNotice(account.usageLimits) === null);
-  if (readable.length === 0) return null;
-  // A signed-in login joins the pool only as a fresher reading of an account the hub routes to;
-  // strip unrelated usageLimits / usageSources on multi-source providers (such as Pi).
-  const matchesHubAccount = (
-    accountDriver: ServerProvider["driver"],
-    workspaceId: string | undefined,
-    email: string | undefined,
-  ) =>
-    readable.some((account) => {
-      const accountEmail = account.email?.toLowerCase();
-      return (
-        accountEmail !== undefined &&
-        account.driver === accountDriver &&
-        account.workspaceId === workspaceId &&
-        accountEmail === email?.toLowerCase()
-      );
-    });
-  const signedIn: ServerProvider[] = [];
-  for (const provider of providers) {
-    const ownDriver = provider.usageLimits?.ownerDriver ?? provider.driver;
-    const keepOwn =
-      provider.usageLimits !== undefined &&
-      matchesHubAccount(ownDriver, provider.auth.workspaceId, provider.auth.email);
-    const matchingSources = (provider.usageSources ?? []).filter((source) =>
-      matchesHubAccount(
-        source.limits.ownerDriver ?? source.driver,
-        source.workspaceId,
-        source.email,
-      ),
-    );
-    if (!keepOwn && matchingSources.length === 0) continue;
-    signedIn.push({
-      ...provider,
-      usageLimits: keepOwn ? provider.usageLimits : undefined,
-      usageSources: matchingSources,
-    });
-  }
-  const presentations = new Map([
-    [
-      CARD_ENVIRONMENT,
-      {
-        entry: { target: { label: "" } },
-        serverConfig: { providers: signedIn, usageLimitSources: routed },
-      },
-    ],
-  ]);
-  const pools = collectLimitPools(collectLimitAccounts(presentations), now);
-  return pools.length > 0
-    ? {
-        kind: "pool",
-        windows: pools.flatMap(displayLimitWindows),
-        amounts: pools.flatMap((pool) => pool.amounts),
-      }
-    : null;
 }
 
 export function poolSources(window: LimitPoolWindow) {

@@ -298,4 +298,110 @@ describe("resolveThreadDetailsLimits", () => {
       expect(codexPool.windows[0]?.remainingPercent).toBe(60);
     }
   });
+
+  it("filters model-scoped windows on fresher matching local logins before pooling", () => {
+    const fresherCheckedAt = "2026-10-30T11:59:30.000Z";
+    const claudeRouted: ServerProvider = {
+      ...claudeInstance(unsupported),
+      auth: {
+        status: "authenticated",
+        type: "customEndpoint",
+        endpoint: "http://127.0.0.1:8317",
+      },
+    };
+    const localClaude: ServerProvider = {
+      ...claudeInstance({
+        checkedAt: fresherCheckedAt,
+        windows: [
+          {
+            id: "five_hour",
+            kind: "session",
+            label: "Session",
+            usedPercent: 15,
+            windowDurationMins: 300,
+            resetsAt: "2026-10-30T13:17:00.000Z",
+          },
+          {
+            id: "seven_day_opus",
+            kind: "weekly",
+            label: "Opus weekly",
+            usedPercent: 95,
+            windowDurationMins: 10_080,
+            resetsAt: "2026-11-05T13:17:00.000Z",
+          },
+        ],
+      }),
+      instanceId: ProviderInstanceId.make("claude-local"),
+      auth: {
+        status: "authenticated",
+        email: "alice@example.com",
+      },
+    };
+    const claudeHub: UsageLimitSourceSnapshot = {
+      id: UsageLimitSourceId.make("Hub"),
+      kind: "cliproxy",
+      label: "Hub",
+      origin: "http://127.0.0.1:8317",
+      checkedAt,
+      accounts: [
+        {
+          id: "alice.json",
+          driver: claude,
+          email: "alice@example.com",
+          models: ["claude-sonnet-4-6", "claude-opus-4-6"],
+          usageLimits: {
+            checkedAt,
+            windows: [
+              {
+                id: "five_hour",
+                kind: "session",
+                label: "Session",
+                usedPercent: 40,
+                windowDurationMins: 300,
+                resetsAt: "2026-10-30T13:17:00.000Z",
+              },
+              {
+                id: "seven_day_opus",
+                kind: "weekly",
+                label: "Opus weekly",
+                usedPercent: 80,
+                windowDurationMins: 10_080,
+                resetsAt: "2026-11-05T13:17:00.000Z",
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const sonnet = resolveThreadDetailsLimits(
+      claudeRouted.instanceId,
+      "claude-sonnet-4-6",
+      [claudeRouted, localClaude],
+      [claudeHub],
+      now,
+    );
+    expect(sonnet?.kind).toBe("pool");
+    if (sonnet?.kind === "pool") {
+      // Uses the fresher local five_hour (85% left) while excluding seven_day_opus on Sonnet.
+      expect(sonnet.windows.map((window) => [window.id, window.remainingPercent])).toEqual([
+        ["five_hour", 85],
+      ]);
+    }
+
+    const opus = resolveThreadDetailsLimits(
+      claudeRouted.instanceId,
+      "claude-opus-4-6",
+      [claudeRouted, localClaude],
+      [claudeHub],
+      now,
+    );
+    expect(opus?.kind).toBe("pool");
+    if (opus?.kind === "pool") {
+      expect(opus.windows.map((window) => [window.id, window.remainingPercent])).toEqual([
+        ["five_hour", 85],
+        ["seven_day_opus", 5],
+      ]);
+    }
+  });
 });
