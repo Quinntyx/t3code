@@ -322,17 +322,39 @@ describe("createSteadyShellAtoms", () => {
     });
     const registry = AtomRegistry.make();
     const release = registry.mount(steady.snapshotAtom(A));
+    const releaseFresh = registry.mount(steady.freshEnvironmentIdsAtom);
+
+    expect(registry.get(steady.freshEnvironmentIdsAtom).has(A)).toBe(false);
 
     registry.set(snapshots(A), liveA);
-    registry.set(shellStates(A), { ...EMPTY_SHELL_STATE, status: "live", generation: 1 });
+    registry.set(shellStates(A), {
+      ...EMPTY_SHELL_STATE,
+      status: "live",
+      generation: 1,
+      fresh: true,
+    });
     registry.set(
       connections(A),
       AsyncResult.success({ ...AVAILABLE_CONNECTION_STATE, desired: true, phase: "connected" }),
     );
+    // While A's live snapshot is still held behind cachedA, A must not be marked fresh yet.
     expect(registry.get(steady.snapshotAtom(A))).toBe(cachedA);
+    expect(registry.get(steady.freshEnvironmentIdsAtom).has(A)).toBe(false);
 
     vi.advanceTimersByTime(WINDOW);
     expect(registry.get(steady.snapshotAtom(A))).toBe(liveA);
+    expect(registry.get(steady.freshEnvironmentIdsAtom).has(A)).toBe(true);
+
+    // A long background resume clears freshness immediately.
+    registry.set(shellStates(A), {
+      ...EMPTY_SHELL_STATE,
+      status: "synchronizing",
+      generation: 1,
+      fresh: false,
+    });
+    expect(registry.get(steady.freshEnvironmentIdsAtom).has(A)).toBe(false);
+
+    releaseFresh();
     release();
   });
 });

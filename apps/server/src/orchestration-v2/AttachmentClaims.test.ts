@@ -15,8 +15,10 @@ import * as Layer from "effect/Layer";
 
 import {
   createPendingAttachmentId,
+  createScratchAttachmentId,
   parseThreadSegmentFromAttachmentId,
 } from "../attachmentStore.ts";
+import { deletePendingAttachment } from "../assets/AttachmentUpload.ts";
 import * as ServerConfig from "../config.ts";
 import {
   attachmentIsPendingUpload,
@@ -283,5 +285,40 @@ describe("AttachmentClaims", () => {
       const config = yield* ServerConfig.ServerConfig;
       expect(NodeFS.readdirSync(config.attachmentsDir)).toHaveLength(1);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "claims a scratch image by copy without deleting the source and refuses pending delete",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const scratchId = createScratchAttachmentId();
+        const scratchPath = NodePath.join(config.attachmentsDir, `${scratchId}.png`);
+        NodeFS.mkdirSync(config.attachmentsDir, { recursive: true });
+        NodeFS.writeFileSync(scratchPath, new Uint8Array([9, 8, 7, 6]));
+
+        const scratchAttachment: ChatAttachment = {
+          type: "image",
+          id: scratchId,
+          name: "diagram.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        };
+        // Pending upload deletion must never touch scratch-* assets (and MCP checks exclude them).
+        expect(attachmentIsPendingUpload(scratchAttachment)).toBe(false);
+        yield* deletePendingAttachment(scratchId);
+        expect(NodeFS.existsSync(scratchPath)).toBe(true);
+
+        const claimed = yield* claimPendingAttachments({
+          threadId: "thread-scratch-claim",
+          attachments: [scratchAttachment],
+        });
+        expect(claimed.attachments).toHaveLength(1);
+        expect(parseThreadSegmentFromAttachmentId(claimed.attachments[0]!.id)).toBe(
+          "thread-scratch-claim",
+        );
+        expect(NodeFS.existsSync(claimed.claimedPaths[0]!)).toBe(true);
+        expect(NodeFS.existsSync(scratchPath)).toBe(true);
+      }).pipe(Effect.provide(layerTest)),
   );
 });

@@ -56,46 +56,154 @@ export function usageOrigin(value: string): string | null {
   }
 }
 
-type UsageLimitProvider = Pick<ServerProvider, "driver" | "usageLimits">;
+type UsageLimitProvider = {
+  readonly driver?: ServerProvider["driver"] | undefined;
+  readonly usageLimits?: ServerProviderUsageLimits | undefined;
+};
+
+const CLAUDE_SCOPED_WINDOW_PREFIX = "seven_day_";
+
+function filterUsageWindowsForModel(
+  driver: ServerProvider["driver"] | undefined,
+  windows: ReadonlyArray<ServerProviderUsageWindow>,
+  model?: string | null,
+): ReadonlyArray<ServerProviderUsageWindow> {
+  const matching = windows.filter(
+    (window) =>
+      (typeof model !== "string" ||
+        window.modelIds === undefined ||
+        window.modelIds.includes(model)) &&
+      (typeof model !== "string" ||
+        window.providerIds === undefined ||
+        window.providerIds.includes(model.split("/")[0] ?? "")),
+  );
+  if (model === undefined) return matching;
+  if (model === null) {
+    // A model-scoped Claude weekly allowance blocks only its own model; an unknown model is not blocked.
+    if (driver === "claudeAgent") {
+      return matching.filter((window) => !window.id.startsWith("seven_day_"));
+    }
+    if (driver === "codex") {
+      const hasPlanWindows = windows.some(
+        (window) => window.id === "primary" || window.id === "secondary",
+      );
+      return matching.filter((window) => window.id !== "individual" || !hasPlanWindows);
+    }
+    return matching;
+  }
+  switch (driver) {
+    case "cursor": {
+      const hasSplitPools = matching.some(
+        (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
+      );
+      if (!hasSplitPools) return matching;
+      return /^(auto|default|grok|composer)/.test(model)
+        ? matching.filter(
+            (window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed",
+          )
+        : matching.filter((window) => window.id === "apiPercentUsed");
+    }
+    case "antigravity": {
+      // A hub can prefix model ids, such as "ag/gemini-3.1-pro".
+      const base = model.slice(model.lastIndexOf("/") + 1);
+      const family = base.match(/^(gemini|claude|gpt)(?:-|$)/)?.[1];
+      const geminiTier =
+        family === "gemini" ? base.match(/(?:^|-)(argon|carbon)(?:-|$)/)?.[1] : undefined;
+      const hasTieredGemini = matching.some((window) => /^gemini-(argon|carbon)-/.test(window.id));
+      return matching.filter((window) => {
+        const geminiBucketTier = window.id.match(/^gemini-(argon|carbon)-/)?.[1];
+        if (geminiBucketTier !== undefined) {
+          return family === undefined || (family === "gemini" && geminiTier === geminiBucketTier);
+        }
+        const pool = window.id.match(/^(gemini|claude|gpt|3p)-/)?.[1];
+        if (pool === "gemini" && geminiTier !== undefined && hasTieredGemini) return false;
+        return (
+          pool === undefined ||
+          family === undefined ||
+          pool === family ||
+          (pool === "3p" && (family === "claude" || family === "gpt"))
+        );
+      });
+    }
+    case "claudeAgent": {
+      const normalizedModel = model
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      const boundedModel = `_${normalizedModel}_`;
+      return matching.filter((window) => {
+        if (!window.id.startsWith("seven_day_")) return true;
+        const scope = window.id
+          .slice("seven_day_".length)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")
+          .replace(/^claude_/, "");
+        return scope.length === 0 || boundedModel.includes(`_${scope}_`);
+      });
+    }
+    case "codex": {
+      // Spark has its own Codex rate-limit bucket, which the Codex adapter omits from the main
+      // allowance windows, so unscoped Codex windows do not govern Spark models.
+      if (/(?:^|[-/])spark(?:$|[-/])/i.test(model)) {
+        return matching.filter((window) => window.modelIds !== undefined);
+      }
+      // Seat-based plans spend credits only past their plan windows, so the credit cap blocks only plans without them.
+      const hasPlanWindows = windows.some(
+        (window) => window.id === "primary" || window.id === "secondary",
+      );
+      return matching.filter((window) => window.id !== "individual" || !hasPlanWindows);
+    }
+    case "opencode":
+      return matching.filter(
+        (window) => !window.id.startsWith("go_") || model.startsWith("opencode-go/"),
+      );
+    default:
+      return matching;
+  }
+}
+
+export function usageWindowsForModel(
+  provider: ServerProvider | UsageLimitProvider | undefined,
+  model?: string | null,
+): ReadonlyArray<ServerProviderUsageWindow> {
+  if (provider?.usageLimits?.unavailable) return [];
+  const windows = provider?.usageLimits?.windows ?? [];
+  // A provider reading another provider's login reports that login's pool, so classify by its owner.
+  const driver = provider?.usageLimits?.ownerDriver ?? provider?.driver;
+  return filterUsageWindowsForModel(driver, windows, model);
+}
 
 function exhaustedUsageWindows(
   provider: UsageLimitProvider | undefined,
   now: number,
   model?: string | null,
 ) {
-  const windows = provider?.usageLimits?.windows ?? [];
-  const driver = provider?.usageLimits?.ownerDriver ?? provider?.driver;
-  const exhausted = windows.filter(
+  const applicable = usageWindowsForModel(provider, model);
+  const exhausted = applicable.filter(
     (window) =>
       (window.usedPercent ?? 0) >= 100 &&
       (!window.resetsAt ||
         !Number.isFinite(Date.parse(window.resetsAt)) ||
         Date.parse(window.resetsAt) > now),
   );
-  if (model === undefined) return exhausted;
-  if (driver === "cursor" && model !== null) {
-    const scoped = exhausted.filter((window) =>
-      usageWindowLimitsModel(driver, window, model, windows),
-    );
-    const api = scoped.find((window) => window.id === "apiPercentUsed");
-    const auto = scoped.find((window) => window.id === "autoPercentUsed");
-    return /^(auto|default|grok|composer)/.test(model)
-      ? auto && api
-        ? [api, auto]
-        : []
-      : api
-        ? [api]
-        : [];
+  if (
+    typeof model === "string" &&
+    (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
+    /^(auto|default|grok|composer)/.test(model) &&
+    applicable.some((window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed")
+  ) {
+    const api = exhausted.find((window) => window.id === "apiPercentUsed");
+    const auto = exhausted.find((window) => window.id === "autoPercentUsed");
+    return auto && api ? [api, auto] : [];
   }
-  return driver === undefined
-    ? exhausted
-    : exhausted.filter((window) => usageWindowLimitsModel(driver, window, model, windows));
+  return exhausted;
 }
 
 export function exhaustedUsageWindow(
-  provider: ServerProvider | undefined,
+  provider: ServerProvider | UsageLimitProvider | undefined,
   now: number,
-  model?: string,
+  model?: string | null,
 ) {
   return exhaustedUsageWindows(provider, now, model)[0];
 }
@@ -109,11 +217,12 @@ function usageLimitResetAt(
   const windows = exhaustedUsageWindows(provider, now, model);
   if (windows.length === 0) return null;
   const resets = windows.map((window) => Date.parse(window.resetsAt ?? ""));
-  // Cursor's own models can spend either pool; other limits must all reset.
+  // Cursor's own models can spend either pool when split pools are reported; other limits must all reset.
   const alternativePools =
-    provider?.driver === "cursor" &&
+    (provider?.usageLimits?.ownerDriver ?? provider?.driver) === "cursor" &&
     typeof model === "string" &&
-    /^(auto|default|grok|composer)/.test(model);
+    /^(auto|default|grok|composer)/.test(model) &&
+    windows.some((window) => window.id === "apiPercentUsed" || window.id === "autoPercentUsed");
   if (!alternativePools && resets.some((reset) => !Number.isFinite(reset))) return null;
   const known = resets.filter(Number.isFinite);
   if (known.length === 0) return null;
@@ -160,9 +269,7 @@ export function filterUsageLimitsForModel(
 ): ServerProviderUsageLimits {
   if (limits.windows.length === 0) return limits;
   const effectiveDriver = limits.ownerDriver ?? driver;
-  const windows = limits.windows.filter((window) =>
-    usageWindowLimitsModel(effectiveDriver, window, model, limits.windows),
-  );
+  const windows = filterUsageWindowsForModel(effectiveDriver, limits.windows, model);
   return windows.length === limits.windows.length ? limits : { ...limits, windows };
 }
 
@@ -1431,73 +1538,6 @@ export function resolveInstanceHubRoutes(
     return origin !== null && driversByOrigin.has(origin);
   });
   return { driver, hubs, origins: [...driversByOrigin.keys()], driversByOrigin, directOnly: false };
-}
-
-const CLAUDE_SCOPED_WINDOW_PREFIX = "seven_day_";
-const claudeScopeToken = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-
-/** A model-scoped Claude weekly allowance blocks only its own model; an unknown model is not blocked. */
-function claudeWindowLimitsModel(
-  window: Pick<ServerProviderUsageWindow, "id">,
-  model: string | null,
-): boolean {
-  if (!window.id.startsWith(CLAUDE_SCOPED_WINDOW_PREFIX)) return true;
-  return (
-    model !== null &&
-    claudeScopeToken(model).includes(window.id.slice(CLAUDE_SCOPED_WINDOW_PREFIX.length))
-  );
-}
-
-// Antigravity meters Gemini Argon, Gemini Carbon, other Gemini, and Claude/GPT models apart.
-function antigravityQuotaFamily(id: string) {
-  if (!id.startsWith("gemini")) return "shared";
-  return id.includes("argon") ? "argon" : id.includes("carbon") ? "carbon" : "gemini";
-}
-
-/** Each Antigravity quota blocks only the models it meters. */
-function antigravityWindowLimitsModel(
-  window: Pick<ServerProviderUsageWindow, "id">,
-  model: string | null,
-): boolean {
-  // A hub can prefix model ids, such as "ag/gemini-3.1-pro".
-  const base = model?.slice(model.lastIndexOf("/") + 1);
-  // An alias such as "fast" may route to either quota, so both hold it back.
-  if (base === undefined || !/^(gemini|claude|gpt)/.test(base)) return true;
-  return antigravityQuotaFamily(window.id) === antigravityQuotaFamily(base);
-}
-
-/** Whether a usage window meters the given model across provider-specific bucket rules. */
-function usageWindowLimitsModel(
-  driver: ServerProvider["driver"],
-  window: Pick<ServerProviderUsageWindow, "id" | "modelIds" | "providerIds">,
-  model: string | null,
-  allWindows?: ReadonlyArray<Pick<ServerProviderUsageWindow, "id">>,
-): boolean {
-  if (typeof model === "string") {
-    if (window.modelIds !== undefined && !window.modelIds.includes(model)) return false;
-    if (window.providerIds !== undefined && !window.providerIds.includes(model.split("/")[0] ?? ""))
-      return false;
-  }
-  switch (driver) {
-    case "claudeAgent":
-      return claudeWindowLimitsModel(window, model);
-    case "antigravity":
-      return antigravityWindowLimitsModel(window, model);
-    case "opencode":
-      return model === null || !window.id.startsWith("go_") || model.startsWith("opencode-go/");
-    case "cursor":
-      if (model === null) return true;
-      if (window.id === "autoPercentUsed") return /^(auto|default|grok|composer)/.test(model);
-      return true;
-    case "codex": {
-      if (window.id !== "individual" || allWindows === undefined) return true;
-      return !allWindows.some(
-        (candidate) => candidate.id === "primary" || candidate.id === "secondary",
-      );
-    }
-    default:
-      return true;
-  }
 }
 
 /** Matches hub accounts for a resolved instance route, including null-model Pi routes and v8 model slugs. */

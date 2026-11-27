@@ -86,6 +86,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeVcsBranch
   | typeof WS_METHODS.subscribeWorktreeSetup
   | typeof WS_METHODS.subscribeProjectClones
+  | typeof WS_METHODS.scratchSubscribe
+  | typeof WS_METHODS.scratchSubscribeSummaries
   | typeof WS_METHODS.terminalAttach
   | typeof WS_METHODS.terminalObserve;
 
@@ -297,11 +299,15 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
 
 function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   tag: TTag,
-  makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  makeInput: (
+    session: RpcSession,
+    subscription: object,
+  ) => Effect.Effect<EnvironmentRpcInput<TTag>>,
   mapStream: (
     session: RpcSession,
     input: EnvironmentRpcInput<TTag>,
     stream: Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>,
+    subscription: object,
   ) => Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>>,
   options?: SubscriptionOptions<TTag>,
 ): Stream.Stream<
@@ -341,11 +347,15 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
               let expectedFailureRetries = 0;
               // Not reset by a first value: a stream can emit before every chunk failure.
               let streamFailureRetries = 0;
+              // Reset on first value so a single transient blip on a healthy session does not
+              // cause a much later socket close to flash an error before the supervisor drops it.
+              let transportFailuresSinceLastItem = 0;
               const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
                     Effect.gen(function* () {
-                      const input = yield* makeInput(session);
+                      const subscription = {};
+                      const input = yield* makeInput(session, subscription);
                       const completeObservation = yield* observer.observe({
                         environmentId: supervisor.target.environmentId,
                         method: tag,
@@ -355,10 +365,12 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         session,
                         input,
                         Stream.suspend(() => method(input)),
+                        subscription,
                       ).pipe(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
                             expectedFailureRetries = 0;
+                            transportFailuresSinceLastItem = 0;
                           }),
                         ),
                       );
@@ -422,6 +434,19 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         resubscribesOnSameSession &&
                         (isTransportFailure || isChunkDecodeDefect)
                       ) {
+                        const retries = streamFailureRetries++;
+                        const transportRetries = isTransportFailure
+                          ? transportFailuresSinceLastItem++
+                          : 0;
+                        // Leave the first transport failure silent so a normal socket close does
+                        // not flash a stream error before the supervisor drops the session, then
+                        // surface persistent same-session failures.
+                        const reportFailure =
+                          isTransportFailure &&
+                          transportRetries > 0 &&
+                          options?.onExpectedFailure !== undefined
+                            ? options.onExpectedFailure(cause)
+                            : Effect.void;
                         return Stream.fromEffect(
                           Effect.logWarning(
                             "Durable RPC subscription stream ended; resubscribing.",
@@ -430,13 +455,13 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                               method: tag,
                               environmentId: supervisor.target.environmentId,
                             },
-                          ),
+                          ).pipe(Effect.andThen(reportFailure)),
                         ).pipe(
                           Stream.drain,
                           Stream.concat(
                             retryAfter(
                               options?.retryExpectedFailureAfter ?? STREAM_FAILURE_RETRY_DELAY,
-                              streamFailureRetries++,
+                              retries,
                             ),
                           ),
                         );
@@ -527,6 +552,28 @@ export function subscribeDynamicWithInput<TTag extends EnvironmentSubscriptionRp
     tag,
     makeInput,
     (_session, input, stream) => stream.pipe(Stream.map((value) => [input, value] as const)),
+    options,
+  );
+}
+
+/** Tags each value with its subscription attempt so same-session resubscribes ignore buffered items from the prior stream. */
+export function subscribeDynamicWithSubscription<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  makeInput: (
+    session: RpcSession,
+    subscription: object,
+  ) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  options?: SubscriptionOptions<TTag>,
+): Stream.Stream<
+  readonly [subscription: object, value: EnvironmentRpcStreamValue<TTag>],
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor.EnvironmentSupervisor
+> {
+  return subscribeDynamicMapped(
+    tag,
+    makeInput,
+    (_session, _input, stream, subscription) =>
+      stream.pipe(Stream.map((value) => [subscription, value] as const)),
     options,
   );
 }

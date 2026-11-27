@@ -64,7 +64,9 @@ export class PreviewManager extends Context.Service<
     readonly registerBeforeClose: (
       handler: (snapshots: ReadonlyArray<PreviewSessionSnapshot>) => Effect.Effect<void>,
     ) => Effect.Effect<void, never, Scope.Scope>;
-    readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
+    readonly list: (
+      input: PreviewListInput & { readonly openedAtOrBeforeMs?: number },
+    ) => Effect.Effect<PreviewListResult>;
     readonly events: Stream.Stream<PreviewEvent>;
     readonly subscribeEvents: Effect.Effect<PubSub.Subscription<PreviewEvent>, never, Scope.Scope>;
   }
@@ -73,6 +75,7 @@ export class PreviewManager extends Context.Service<
 interface PreviewSessionState {
   readonly threadId: string;
   readonly tabId: string;
+  readonly openedAtMs: number;
   readonly snapshot: PreviewSessionSnapshot;
 }
 
@@ -193,7 +196,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
       const runtime = input.runtime;
       // Persisted client surfaces must not bind to a different tab after a server restart.
       const tabId = `${newPreviewTabId()}${runtime === "server" ? `_${serverEpoch}` : ""}`;
-      const updatedAt = yield* currentIsoTimestamp;
+      const openedAt = yield* DateTime.now;
+      const openedAtMs = DateTime.toEpochMillis(openedAt);
+      const updatedAt = DateTime.formatIso(openedAt);
       const snapshot: PreviewSessionSnapshot = {
         threadId: input.threadId,
         tabId,
@@ -220,6 +225,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           sessions.set(compositeKey(input.threadId, tabId), {
             threadId: input.threadId,
             tabId,
+            openedAtMs,
             snapshot,
           });
           input.beforePublish?.(snapshot);
@@ -454,6 +460,10 @@ export const make = Effect.gen(function* PreviewManagerMake() {
       return yield* SynchronizedRef.get(stateRef).pipe(
         Effect.map((state): PreviewListResult => ({
           sessions: sessionsForThread(state, input.threadId)
+            .filter(
+              (s) =>
+                input.openedAtOrBeforeMs === undefined || s.openedAtMs <= input.openedAtOrBeforeMs,
+            )
             .map((s) => s.snapshot)
             .toSorted((a, b) => a.updatedAt.localeCompare(b.updatedAt)),
           serverEpoch,

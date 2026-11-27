@@ -68,9 +68,6 @@ import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
-import * as ProviderUsageAnalytics from "./telemetry/ProviderUsageAnalytics.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
@@ -196,7 +193,6 @@ import * as LinkThreadHttp from "./peer/linkThreadHttp.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
 import * as ConnectReachability from "./cloud/ConnectReachability.ts";
 import { pendingServiceUpdateExists } from "./cloud/updateHandoff.ts";
-import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as RelayClientLedger from "./cloud/RelayClientLedger.ts";
 import {
@@ -228,6 +224,7 @@ import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as ThreadNotebookService from "./notebook/ThreadNotebookService.ts";
+import * as ScratchService from "./scratch/ScratchService.ts";
 import * as PycellsLauncher from "./notebook/PycellsLauncher.ts";
 import * as ThreadUsageService from "./usage/ThreadUsageService.ts";
 import * as UsageService from "./usage/UsageService.ts";
@@ -678,7 +675,6 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(UsageLimitSources.layerResetFallback),
   Layer.provide(layerTaskFolders),
   Layer.provide(layerScheduledTaskWebhookOrigin),
-  Layer.provide(ProviderUsageAnalytics.layer),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
   Layer.provide(
@@ -776,7 +772,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   layerThreadPullRequestWorker,
   KeepAwake.layer,
-  DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -830,7 +825,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer)),
+  Layer.provideMerge(
+    Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer, ScratchService.layer),
+  ),
   Layer.provideMerge(ProviderRegistry.layer),
   Layer.provideMerge(
     ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(SqlitePersistence.layerConfig)),
@@ -907,8 +904,6 @@ const layerRuntimeDependenciesCore = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(TriageService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
-  // Layers memoize by reference, so this is the same policy the settings layer reads.
-  Layer.provideMerge(AnalyticsService.layer.pipe(Layer.provide(ManagedPolicy.layer))),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
@@ -1483,9 +1478,6 @@ const layerMakeServer = Layer.unwrap(
         ),
       ),
       Layer.provide(layerActivation),
-      Layer.provideMerge(
-        RelayTracing.layerServerRelayBroker.pipe(Layer.provide(ManagedPolicy.layer)),
-      ),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(FetchHttpClient.layer),

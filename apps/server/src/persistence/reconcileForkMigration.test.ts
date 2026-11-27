@@ -8,6 +8,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import VoiceNotificationIndex from "./Migrations/111_VoiceNotificationIndex.ts";
 import SubagentLineageIndex from "./Migrations/112_SubagentLineageIndex.ts";
+import WaitingEmailRequestIndex from "./Migrations/114_WaitingEmailRequestIndex.ts";
+import ScratchDocuments from "./Migrations/115_ScratchDocuments.ts";
 import { reconciledForkHistory } from "./reconcileForkMigration.ts";
 
 // Historical fork migration 81 lacked `json_valid(payload_json)` before migration 111 hardened it.
@@ -77,18 +79,29 @@ describe("legacy fork migration reconciliation", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([false, true])(
-    "upgrades prior fork database through 103 (with 104=%s) onto upstream 103..110 + fork 111..112",
-    (withSubagentIndex) =>
+  it.effect.each([1, 2, 3, 4] as const)(
+    "upgrades prior fork database through 103..%s onto upstream 103..110 + fork 111..115",
+    (forkCount) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* runMigrations({ toMigrationInclusive: 102 });
         yield* Migrator.make({})({
           loader: Migrator.fromRecord({
             "103_VoiceNotificationIndex": VoiceNotificationIndex,
-            ...(withSubagentIndex ? { "104_SubagentLineageIndex": SubagentLineageIndex } : {}),
+            ...(forkCount >= 2 ? { "104_SubagentLineageIndex": SubagentLineageIndex } : {}),
+            ...(forkCount >= 3 ? { "105_WaitingEmailRequestIndex": WaitingEmailRequestIndex } : {}),
+            ...(forkCount >= 4 ? { "106_ScratchDocuments": ScratchDocuments } : {}),
           }),
         });
+        if (forkCount >= 4) {
+          yield* sql`
+            INSERT INTO scratch_documents (
+              scratch_key, markdown, has_content, revision, last_cursor_offset, updated_at
+            ) VALUES (
+              'project:1', 'keep me', 1, 3, 7, '2026-11-27T00:00:00.000Z'
+            )
+          `;
+        }
 
         const executed = yield* runMigrations();
         assert.deepStrictEqual(
@@ -99,6 +112,13 @@ describe("legacy fork migration reconciliation", () => {
         const indexes = yield* readIndexes;
         assert.isDefined(indexes.get("orchestration_v2_projection_turn_items_voice_idx"));
         assert.isTrue(indexes.has("orchestration_v2_projection_threads_subagent_parent_idx"));
+        assert.isTrue(indexes.has("orchestration_v2_projection_turn_items_waiting_email_idx"));
+        if (forkCount >= 4) {
+          const rows = yield* sql<{ readonly markdown: string; readonly revision: number }>`
+            SELECT markdown, revision FROM scratch_documents WHERE scratch_key = 'project:1'
+          `;
+          assert.deepStrictEqual(rows, [{ markdown: "keep me", revision: 3 }]);
+        }
 
         yield* sql`PRAGMA query_only = ON`;
         assert.deepStrictEqual(yield* runMigrations(), []);

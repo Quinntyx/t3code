@@ -1935,6 +1935,8 @@
   "98f445984c075971": "Nebenchats sind nach der ersten Nachricht verfügbar.",
   "e9cf5c708ad52a85": "Verfügbar, sobald der Worktree des Threads eingerichtet ist.",
   "6b1c0d7732da6648": "Kontext konnte nicht komprimiert werden.",
+  "324d80c56dcc6b7e": "Bild konnte nicht hinzugefügt werden",
+  "b495aaebe5455e65": "Scratch-Bilder konnten nicht auf den Zielrechner kopiert werden",
   "bbbce20ad5d6790d": "{count, plural, one {{count} eingereiht} other {{count} eingereiht}}",
   "2d3ad1215c5d8a52": "Diese Verbindung kann keine Threads ändern.",
   "6b6182011ef50565": "Thread wird auf einen anderen Rechner verschoben",
@@ -1943,6 +1945,7 @@
   "0e974f4d7d582b12": "Feedback wird gesendet",
   "abb59f572874d3b4": "Nachrichten werden geladen",
   "9c353040cc3010c4": "Worktree wird vorbereitet",
+  "284e925bc681a50a": "Auswahl",
   "536ad0c3529ef1b3": "Die Zwischenablage-API ist beim Kopieren des Befehls nicht verfügbar.",
   "7e06782c1ee65b02": "Der Befehl konnte nicht in die Zwischenablage kopiert werden.",
   "61bc68e834fb83af": "Befehl kopieren",
@@ -3630,6 +3633,7 @@
   "5c0eb4217bb673bd": "ChatGPT-Abo wird verwendet",
   "3e545d70d0c3535c": "Thread-Pfad",
   "890c34762a621a66": "Übergeordneten Thread öffnen: {title}",
+  "0bc152a492a12716": "Scratch",
   "7514746d2bd43a1c": "Thread-Titel",
   "ab42a6d2ab6073d9": "Thread-Aktionen für {title}",
   "cd8fd5a47060164b": [
@@ -6572,26 +6576,6 @@
   ],
   "216ab7514aea1d61": "Ohne Agenten starten",
   "501ce2d99da8bfd1": "Richte einen Agenten ein, um zu starten.",
-  "71f3822326109c8e": [
-    "T3 Code erfasst anonyme Nutzungsdaten, um die App zu verbessern. Wie du widersprichst, steht in der",
-    " ",
-    {
-      "t": "a",
-      "i": 1,
-      "c": "Datenschutzerklärung"
-    },
-    "."
-  ],
-  "b33f35083757b42c": [
-    "Siehe",
-    " ",
-    {
-      "t": "a",
-      "i": 1,
-      "c": "Datenschutzerklärung"
-    },
-    "."
-  ],
   "f77d000c0710f066": "Aktivieren",
   "4ed27bf946e504db": "Einrichten",
   "7a26eaacff0607f7": [
@@ -7722,6 +7706,14 @@
   "14a07a8f2b0df4dc": "{closed, plural, one {{closed} Pull Request geschlossen} other {{closed} Pull Requests geschlossen}}",
   "48e3a799c1225e8d": "Der Pull Request des Threads kann nicht aktualisiert werden",
   "6c56f46a160d2662": "{term, select, mr {Merge Request} cr {Änderungsanfrage} other {Pull Request}} #{number} mergen?",
+  "cb2a143384b61830": "Zur Auswahl scrollen",
+  "5add91224b8ed4d0": "Mit Eingabetaste senden",
+  "54ee382ef64e1327": "Auswahl aufheben",
+  "6702ab96d7c18bc8": "Bild vergrößern",
+  "ec9388fc860a64f6": "Bild entfernen",
+  "1e40114e03b7e42a": "Scratch-Dokument",
+  "256f9024d282c896": "Scratch-Seite konnte nicht gespeichert werden.",
+  "ac176c47f6a4aa46": "Scratch-Seite konnte nicht aktualisiert werden.",
   "7e8a1a9a7355ac10": "Projektinhalte durchsuchen…",
   "acd933aed79835b4": "Dateiinhalte in {project} durchsuchen",
   "99ab4b9c352f4896": "Groß-/Kleinschreibung beachten",
@@ -9251,6 +9243,7 @@
   "37f2a47d12cdfdf8": "Eingabefeld: Gegenteilige Aktion (Einreihen oder Umlenken)",
   "d9d54dde0ba27d96": "Eingabefeld: Im Hintergrund starten",
   "ad9c298de0bfbc1b": "Eingabefeld: Senden und neuen Thread starten",
+  "15d88c8c8ae85732": "Scratch: Fokus umschalten oder Auswahl aktivieren",
   "5e97cb4f703ff372": "Eingabefeld: Diktat starten oder beenden",
   "e49ba42e8e8596d2": "Warteschlange: Erste eingereihte Nachricht senden",
   "7f67d035b1db66f5": "Warteschlange: Letzte eingereihte Nachricht bearbeiten",

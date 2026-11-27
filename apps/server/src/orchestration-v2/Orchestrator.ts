@@ -4727,7 +4727,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const projection = yield* loadProjectionForCommand(
         command,
         ["runs", "runtimeRequests", "turnItems"],
-        { turnItemTypes: ["secret_request", "email_request"], turnItemStatuses: ["waiting"] },
+        {
+          turnItemTypes:
+            command.expectedLatestRunId === undefined
+              ? ["secret_request"]
+              : ["secret_request", "email_request"],
+          turnItemStatuses: ["waiting"],
+        },
       );
       if (
         command.expectedLatestRunId !== undefined &&
@@ -5984,6 +5990,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "thread.archive" || command.type === "thread.settle") {
       yield* closePendingLinkRequests({ command, events, threadId: command.threadId, now });
+      yield* closePendingEmailRequests({ command, events, threadId: command.threadId, now });
     }
 
     if (liveSessions.length > 0) {
@@ -7500,6 +7507,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const hasPendingRuntimeRequest = projection.runtimeRequests.some(
         (request) => request.status === "pending",
       );
+      const modelChangedBeforeEarlyResume =
+        resetObserved &&
+        run != null &&
+        projection.thread.modelSelection.model !== run.modelSelection.model;
+      const providerChangedBeforeResume =
+        run != null && projection.thread.providerInstanceId !== run.providerInstanceId;
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
         failure?.class !== "usage_limit" ||
@@ -7510,10 +7523,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         recovery.runId !== run.id ||
         recovery.resetAt !== failure.resetAt ||
         (!resetObserved && Date.parse(recovery.resetAt) > DateTime.toEpochMillis(now)) ||
+        modelChangedBeforeEarlyResume ||
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
         projection.thread.settledOverride === "settled" ||
-        projection.thread.providerInstanceId !== run.providerInstanceId ||
+        providerChangedBeforeResume ||
         hasPendingRuntimeRequest ||
         snoozeHolds
       ) {
@@ -7523,7 +7537,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           recovery.runId === command.usageLimitContinuationOfRunId &&
           ((projection.thread.snoozedUntil != null &&
             DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)) ||
-            ((agentsWaiting || hasPendingRuntimeRequest) &&
+            ((agentsWaiting ||
+              hasPendingRuntimeRequest ||
+              modelChangedBeforeEarlyResume ||
+              providerChangedBeforeResume) &&
               run?.id === command.usageLimitContinuationOfRunId &&
               failure?.class === "usage_limit" &&
               recovery.resetAt === failure.resetAt &&
@@ -11532,6 +11549,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     function* (
       command: Extract<OrchestrationV2InternalCommand, { readonly type: "email_request.record" }>,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
       const projection = yield* projectionStore
         .getRunCardRecords(command.threadId, command.runId, command.nodeId, "email_request")
@@ -11549,13 +11567,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
-      // Only a new card needs its run's current root. A steer restarts the run
-      // under a new root, and the card asked before it must still close.
+      // Only a new card needs its run's current root and a live run. An answer
+      // may land long after a steer restarted the run or the run ended.
       if (existing === undefined && run.rootNodeId !== command.nodeId) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Node ${command.nodeId} is not the root of run ${command.runId}.`,
+        });
+      }
+      if (
+        existing === undefined &&
+        (!isActiveRun(run) || (yield* stopReachedRun(command, command.threadId, run.id)))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Run ${command.runId} is not active.`,
         });
       }
       if (existing !== undefined && existing.type !== "email_request") {
@@ -11610,6 +11638,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             accounts: command.accounts,
             draft: command.draft,
             emailStatus: command.emailStatus,
+            ...(command.edited === undefined ? {} : { edited: command.edited }),
           };
       if (!unchanged && command.emailStatus === "sent" && projection.thread.snoozedUntil != null) {
         yield* emit(
@@ -11635,6 +11664,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: turnItem,
       });
+      // The agent drafted without waiting, so the answer reaches it as a
+      // notification: it starts a turn, or follows the one running. Only the
+      // answer that closes the card wakes it, and never a closed thread.
+      if (
+        command.wake === undefined ||
+        unchanged ||
+        projection.thread.archivedAt !== null ||
+        projection.thread.deletedAt !== null
+      ) {
+        return;
+      }
+      yield* dispatchMessage(
+        {
+          type: "message.dispatch",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messageId: command.wake.messageId,
+          text: command.wake.text,
+          notification: command.wake.notification,
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        },
+        events,
+        effects,
+      );
     },
   );
 
@@ -11959,6 +12015,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...item,
             status: "cancelled",
             linkStatus: "cancelled",
+            completedAt: input.now,
+            updatedAt: input.now,
+          },
+        });
+      }
+    },
+  );
+
+  /**
+   * Closes email draft cards still waiting for the user when the thread is
+   * settled or archived. Stopping a run leaves open drafts alive so the user
+   * can finish typing or discard them explicitly.
+   */
+  const closePendingEmailRequests = Effect.fn("orchestrationV2.closePendingEmailRequests")(
+    function* (input: {
+      readonly command: OrchestrationV2ServerCommand;
+      readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+      readonly threadId: ThreadId;
+      readonly now: DateTime.Utc;
+    }) {
+      const { turnItems } = yield* projectionStore
+        .getThreadRecords(input.threadId, ["turnItems"], {
+          turnItemTypes: ["email_request"],
+          turnItemStatuses: ["waiting"],
+          messageRoles: [],
+        })
+        .pipe(mapDispatchError(input.command));
+      for (const item of turnItems) {
+        if (item.type !== "email_request" || item.emailStatus !== "pending") continue;
+        yield* emit(
+          input.events,
+          input.command,
+        )({
+          type: "turn-item.updated",
+          threadId: input.threadId,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+          occurredAt: input.now,
+          payload: {
+            ...item,
+            status: "cancelled",
+            emailStatus: "cancelled",
             completedAt: input.now,
             updatedAt: input.now,
           },
@@ -16909,7 +17007,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchSecretRequestRecord(command, events);
         break;
       case "email_request.record":
-        yield* dispatchEmailRequestRecord(command, events);
+        yield* dispatchEmailRequestRecord(command, events, effects);
         break;
       case "feedback_request.record":
         yield* dispatchFeedbackRequestRecord(command, events);

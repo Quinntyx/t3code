@@ -62,6 +62,8 @@ describe("workspace connection subscriptions", () => {
         networkStatus: get(h.network),
         environments: [projectWorkspaceEnvironment(ID, get(h.source)!)],
         shellSummary: get(shell),
+        hasFreshShellSnapshot: true,
+        hasActivelySyncingEnvironment: false,
         hasSyncingConnectedEnvironment: false,
       }),
     );

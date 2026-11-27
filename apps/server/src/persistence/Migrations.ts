@@ -125,6 +125,8 @@ import Migration0110 from "./Migrations/110_Workflows.ts";
 import Migration0111 from "./Migrations/111_VoiceNotificationIndex.ts";
 import Migration0112 from "./Migrations/112_SubagentLineageIndex.ts";
 import Migration0113 from "./Migrations/113_OverloadedFailureIndex.ts";
+import Migration0114 from "./Migrations/114_WaitingEmailRequestIndex.ts";
+import Migration0115 from "./Migrations/115_ScratchDocuments.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -241,6 +243,8 @@ const migrationEntries = [
   [111, "VoiceNotificationIndex", Migration0111],
   [112, "SubagentLineageIndex", Migration0112],
   [113, "OverloadedFailureIndex", Migration0113],
+  [114, "WaitingEmailRequestIndex", Migration0114],
+  [115, "ScratchDocuments", Migration0115],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -318,7 +322,9 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
       SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows,
       SUM(
         (migration_id IN (81, 103) AND name = 'VoiceNotificationIndex') OR
-        (migration_id IN (82, 104) AND name = 'SubagentLineageIndex')
+        (migration_id IN (82, 104) AND name = 'SubagentLineageIndex') OR
+        (migration_id = 105 AND name = 'WaitingEmailRequestIndex') OR
+        (migration_id = 106 AND name = 'ScratchDocuments')
       ) AS forkRows
     FROM effect_sql_migrations
   `;

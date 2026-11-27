@@ -19,6 +19,8 @@ const LEGACY_FORK_TAILS = [
     rows: [
       { id: 103, name: "VoiceNotificationIndex" },
       { id: 104, name: "SubagentLineageIndex" },
+      { id: 105, name: "WaitingEmailRequestIndex" },
+      { id: 106, name: "ScratchDocuments" },
     ],
   },
 ] as const;
@@ -60,15 +62,14 @@ export function classifyLegacyForkTail(
   }
   const tail = matchedTails[0]!;
   const later = history.filter((row) => row.id >= tail.startId).toSorted((a, b) => a.id - b.id);
-  const matchesPartial =
-    later.length === 1 && later[0]?.id === tail.rows[0].id && later[0]?.name === tail.rows[0].name;
-  const matchesFull =
-    later.length === 2 &&
-    later[0]?.id === tail.rows[0].id &&
-    later[0]?.name === tail.rows[0].name &&
-    later[1]?.id === tail.rows[1].id &&
-    later[1]?.name === tail.rows[1].name;
-  if (matchesPartial || matchesFull) {
+  const matchesPrefix =
+    later.length >= 1 &&
+    later.length <= tail.rows.length &&
+    later.every((row, index) => {
+      const expected = tail.rows[index];
+      return expected !== undefined && row.id === expected.id && row.name === expected.name;
+    });
+  if (matchesPrefix) {
     return { kind: "legacy", startId: tail.startId, rows: later };
   }
   return {

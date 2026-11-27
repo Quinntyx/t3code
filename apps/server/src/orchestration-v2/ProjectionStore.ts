@@ -266,6 +266,14 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
   readonly lastErrorCode?: string | null | undefined;
+  /** Provider instance of the failed run, so provider switches never borrow another instance's reset. */
+  readonly latestRunProviderInstanceId: ProviderInstanceId;
+  /** Model of the failed run, so observed limit resets match its quota pool. */
+  readonly latestRunModel: string | null;
+  /** Thread's currently selected model, which a limit-resume dispatch will run. */
+  readonly threadModel: string | null;
+  /** Set when the failed run was itself a usage-limit continuation of an earlier run. */
+  readonly latestRunUsageLimitContinuationOfRunId: RunId | null;
 };
 
 export type ProjectionStallRecoveryCandidate = Pick<
@@ -1400,6 +1408,7 @@ type ShellThreadRow = {
   readonly blocking_failure_payload_json: string | null;
   readonly pending_request_payload_json: string | null;
   readonly pending_secret_request_payload_json: string | null;
+  readonly pending_email_request_payload_json: string | null;
   readonly pending_link_request_payload_json: string | null;
   readonly latest_user_message_at: string | null;
   readonly latest_user_authored_message_at: string | null;
@@ -1961,21 +1970,20 @@ function secretRequestAsPendingInput(
 }
 
 /**
- * Secret and email cards are answered while their agent waits in the run. A link card's
- * agent asked without waiting, so the card waits on the user after its run,
- * until the user writes in the thread again and so has moved past it.
+ * Secret cards are answered while their agent waits in the run. Link and email
+ * cards return without waiting, so they wait on the user after their run until
+ * answered or the user writes in the thread again and moves past them.
  */
 const waitsOnUser = (
   item: OrchestrationV2TurnItem,
   liveRunIds: ReadonlySet<RunId>,
   latestUserAuthoredMessageAt: DateTime.Utc | null,
 ) =>
-  (item.type === "link_request" && linkCardStillAsks(item, latestUserAuthoredMessageAt)) ||
-  ((item.type === "secret_request" || item.type === "email_request") &&
-    item.runId !== null &&
-    liveRunIds.has(item.runId));
+  ((item.type === "link_request" || item.type === "email_request") &&
+    asyncCardStillAsks(item, latestUserAuthoredMessageAt)) ||
+  (item.type === "secret_request" && item.runId !== null && liveRunIds.has(item.runId));
 
-const linkCardStillAsks = (
+const asyncCardStillAsks = (
   item: OrchestrationV2TurnItem,
   latestUserAuthoredMessageAt: DateTime.Utc | null,
 ) =>
@@ -5180,11 +5188,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly run_id: string;
+          readonly provider_instance_id: string;
           readonly completed_at: string | null;
+          readonly model: string | null;
+          readonly usage_limit_continuation_of_run_id: string | null;
           readonly failure_payload_json: string;
           readonly last_error: string | null;
         }>`
-          SELECT t.payload_json, r.run_id, r.completed_at,
+          SELECT t.payload_json, r.run_id, r.provider_instance_id, r.completed_at,
+            json_extract(r.payload_json, '$.modelSelection.model') AS model,
+            json_extract(r.payload_json, '$.usageLimitContinuationOfRunId') AS usage_limit_continuation_of_run_id,
             item.payload_json AS failure_payload_json,
             (
               SELECT json_extract(session.payload_json, '$.lastError')
@@ -5232,6 +5245,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ELSE 0 END
             )
             AND t.archived_at IS NULL
+            AND t.provider_instance_id = r.provider_instance_id
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_valid(item.payload_json)
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
@@ -5298,6 +5312,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             lastErrorClass: summary.lastErrorClass,
             usageLimitResetAt: summary.usageLimitResetAt,
             latestRunId: RunId.make(row.run_id),
+            latestRunProviderInstanceId: ProviderInstanceId.make(row.provider_instance_id),
+            latestRunModel: row.model,
+            threadModel: thread.modelSelection.model,
+            latestRunUsageLimitContinuationOfRunId:
+              row.usage_limit_continuation_of_run_id === null
+                ? null
+                : RunId.make(row.usage_limit_continuation_of_run_id),
             latestRunCompletedAt:
               row.completed_at === null ? null : DateTime.makeUnsafe(row.completed_at),
             updatedAt: thread.updatedAt,
@@ -8981,11 +9002,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE r.thread_id = t.thread_id
                   AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                   AND secret.thread_id = t.thread_id AND secret.run_id = r.run_id
-                  AND secret.type IN ('secret_request', 'email_request')
+                  AND secret.type = 'secret_request'
                   AND secret.status = 'waiting'
                 ORDER BY secret.updated_at DESC, secret.turn_item_id DESC
                 LIMIT 1
               ) AS pending_secret_request_payload_json,
+              (
+                SELECT email.payload_json
+                FROM orchestration_v2_projection_turn_items email
+                  INDEXED BY orchestration_v2_projection_turn_items_waiting_email_idx
+                WHERE email.thread_id = t.thread_id
+                  AND email.type = 'email_request' AND email.status = 'waiting'
+                ORDER BY email.updated_at DESC, email.turn_item_id DESC
+                LIMIT 1
+              ) AS pending_email_request_payload_json,
               (
                 SELECT link.payload_json
                 FROM orchestration_v2_projection_turn_items link
@@ -9395,7 +9425,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   INDEXED BY orchestration_v2_projection_turn_items_waiting_link_idx
                 WHERE link.thread_id = t.thread_id
                   AND link.type = 'link_request' AND link.status = 'waiting'
-                  -- linkCardStillAsks: once the user writes after the card, it stops asking.
+                  -- asyncCardStillAsks: once the user writes after the card, it stops asking.
                   AND NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_messages message
                     WHERE message.thread_id = t.thread_id AND message.role = 'user'
@@ -9403,6 +9433,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND NOT ${isIdleCompactionMessage("message")}
                       AND message.updated_at > COALESCE(
                         json_extract(link.payload_json, '$.startedAt'), link.updated_at
+                      )
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_turn_items email
+                  INDEXED BY orchestration_v2_projection_turn_items_waiting_email_idx
+                WHERE email.thread_id = t.thread_id
+                  AND email.type = 'email_request' AND email.status = 'waiting'
+                  -- asyncCardStillAsks: once the user writes after the card, it stops asking.
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_messages message
+                    WHERE message.thread_id = t.thread_id AND message.role = 'user'
+                      AND json_extract(message.payload_json, '$.createdBy') = 'user'
+                      AND NOT ${isIdleCompactionMessage("message")}
+                      AND message.updated_at > COALESCE(
+                        json_extract(email.payload_json, '$.startedAt'), email.updated_at
                       )
                   )
               )
@@ -9608,6 +9654,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           row.pending_secret_request_payload_json === null
             ? null
             : yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
+          row.pending_email_request_payload_json === null
+            ? null
+            : yield* decodeTurnItemPayload(row.pending_email_request_payload_json),
           row.pending_link_request_payload_json === null
             ? null
             : yield* decodeTurnItemPayload(row.pending_link_request_payload_json),
@@ -9615,7 +9664,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           .filter((item) => item !== null)
           .filter(
             (item) =>
-              item.type !== "link_request" || linkCardStillAsks(item, latestUserAuthoredMessageAt),
+              (item.type !== "link_request" && item.type !== "email_request") ||
+              asyncCardStillAsks(item, latestUserAuthoredMessageAt),
           );
         let pendingRuntimeRequest =
           row.pending_request_payload_json !== null
@@ -10126,6 +10176,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             OR t.thread_id IN (
               SELECT link_request.thread_id FROM orchestration_v2_projection_turn_items link_request
               WHERE link_request.type = 'link_request' AND link_request.status = 'waiting'
+            )
+            OR t.thread_id IN (
+              SELECT email_request.thread_id FROM orchestration_v2_projection_turn_items email_request
+              WHERE email_request.type = 'email_request' AND email_request.status = 'waiting'
             )
             OR t.thread_id IN (
               SELECT provider_thread.thread_id

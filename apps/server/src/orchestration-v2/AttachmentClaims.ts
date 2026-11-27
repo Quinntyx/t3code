@@ -13,6 +13,7 @@ import {
   PENDING_ATTACHMENT_THREAD_SEGMENT,
   planAttachmentClaim,
   resolveAttachmentPath,
+  SCRATCH_ATTACHMENT_THREAD_SEGMENT,
 } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
@@ -39,6 +40,15 @@ export interface ClaimedAttachments {
 
 export function attachmentIsPendingUpload(attachment: ChatAttachment): boolean {
   return parseThreadSegmentFromAttachmentId(attachment.id) === PENDING_ATTACHMENT_THREAD_SEGMENT;
+}
+
+/** Scratch images are shared by every thread on the scratch key, so a send copies them.
+ * Claiming one must never move or consume it. */
+export function attachmentIsClaimableUpload(attachment: ChatAttachment): boolean {
+  const segment = parseThreadSegmentFromAttachmentId(attachment.id);
+  return (
+    segment === PENDING_ATTACHMENT_THREAD_SEGMENT || segment === SCRATCH_ATTACHMENT_THREAD_SEGMENT
+  );
 }
 
 /** Remove partial claims only before dispatch, or after proving they were not accepted. */
@@ -78,7 +88,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
         message: "Duplicate attachment ids are not allowed.",
       });
     }
-    if (!input.attachments.some(attachmentIsPendingUpload)) {
+    if (!input.attachments.some(attachmentIsClaimableUpload)) {
       return { attachments: input.attachments, claimedPaths: [] } satisfies ClaimedAttachments;
     }
     const serverConfig = yield* ServerConfig.ServerConfig;
@@ -89,7 +99,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
       input.attachments,
       (attachment) =>
         Effect.gen(function* () {
-          if (!attachmentIsPendingUpload(attachment)) {
+          if (!attachmentIsClaimableUpload(attachment)) {
             return attachment;
           }
           const claim = planAttachmentClaim({

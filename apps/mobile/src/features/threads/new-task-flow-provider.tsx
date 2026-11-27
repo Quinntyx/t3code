@@ -213,6 +213,8 @@ type NewTaskFlowContextValue = {
     metadata: TurnCommandMetadata,
     options?: {
       readonly currentCheckoutBranch?: string | null;
+      readonly overrideText?: string;
+      readonly overrideAttachments?: ReadonlyArray<DraftComposerAttachment>;
     },
   ) => QueuedThreadMessage | null;
   readonly setPrompt: (value: string) => void;
@@ -785,23 +787,31 @@ export function NewTaskFlowProvider(
 
   const buildPendingTaskMessage = (
     metadata: TurnCommandMetadata,
-    options?: { readonly currentCheckoutBranch?: string | null },
+    options?: {
+      readonly currentCheckoutBranch?: string | null;
+      readonly overrideText?: string;
+      readonly overrideAttachments?: ReadonlyArray<DraftComposerAttachment>;
+    },
   ): QueuedThreadMessage | null => {
     if (!selectedProject || !selectedProjectDraftKey) {
       return null;
     }
     const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
-    const text = draft.text.trim();
+    const hasOverride =
+      options?.overrideText !== undefined || options?.overrideAttachments !== undefined;
+    const text = (options?.overrideText ?? draft.text).trim();
+    const attachments = options?.overrideAttachments ?? draft.attachments;
     const draftModelSelection =
       resolveSelectableModelSelection(
         selectedEnvironmentServerConfig,
         draft.modelSelection ?? null,
         selectedProject.id,
       ) ?? selectedModel;
-    if ((text.length === 0 && draft.attachments.length === 0) || !draftModelSelection) {
+    if ((text.length === 0 && attachments.length === 0) || !draftModelSelection) {
       return null;
     }
     if (
+      !hasOverride &&
       threadContextsOutsideEnvironment({
         text: draft.text,
         records: draft.context?.records ?? [],
@@ -819,8 +829,8 @@ export function NewTaskFlowProvider(
       messageId: MessageId.make(metadata.messageId),
       commandId: CommandId.make(metadata.commandId),
       text,
-      attachments: draft.attachments,
-      context: draft.context,
+      attachments: [...attachments],
+      context: hasOverride ? undefined : draft.context,
       modelSelection: draftModelSelection,
       runtimeMode: resolveNewThreadRuntimeMode(
         draft.runtimeMode,

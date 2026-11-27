@@ -40,6 +40,7 @@ import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
   OrchestrationV2DelegatedFrom,
+  OrchestrationV2EmailEditedField,
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
@@ -938,16 +939,20 @@ export const OrchestratorMcpComposeEmailInput = Schema.Struct({
   from: Schema.optional(TrimmedNonEmptyString).annotate({
     description: "Account name or address to send from. Default: the first account.",
   }),
-  timeoutMs: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
-  ).annotate({ description: "Default 10 min." }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
-    description: "Retry key for this draft. New key after a timeout or cancel.",
+    description: "Retry key for this draft.",
   }),
 });
 export type OrchestratorMcpComposeEmailInput = typeof OrchestratorMcpComposeEmailInput.Type;
 
 export const OrchestratorMcpComposeEmailResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("pending").annotate({
+      description:
+        "The draft card is open for the user to review, edit and send or discard. Their action arrives as a message in this thread.",
+    }),
+    turnItemId: TurnItemId,
+  }),
   Schema.Struct({
     status: Schema.Literal("sent"),
     message: Schema.String,
@@ -956,14 +961,14 @@ export const OrchestratorMcpComposeEmailResult = Schema.Union([
     cc: OrchestratorMcpEmailAddresses,
     bcc: OrchestratorMcpEmailAddresses,
     subject: Schema.String,
-    edited: Schema.Array(Schema.Literals(["from", "to", "cc", "bcc", "subject", "body"])).annotate({
+    edited: Schema.Array(OrchestrationV2EmailEditedField).annotate({
       description: "Fields the user changed from your draft before sending.",
     }),
   }),
   Schema.Struct({
-    status: Schema.Literals(["discarded", "cancelled", "timed_out"]).annotate({
+    status: Schema.Literals(["discarded", "cancelled"]).annotate({
       description:
-        "discarded: user chose not to send. cancelled: ended with the run. timed_out: not sent in time. Do not retry unless the user asks.",
+        "discarded: user chose not to send. cancelled: card closed unanswered when the thread was archived or settled. Do not retry unless the user asks.",
     }),
   }),
 ]);

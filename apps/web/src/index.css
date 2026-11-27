@@ -3037,3 +3037,29 @@ code {
 .messages-timeline-scroll:focus-visible {
   outline: none;
 }
+
+/* Scratch editing: the armed chunk stays editable, everything around it dims. */
+.scratch-block-armed {
+  border-radius: 6px;
+  padding-inline: 10px;
+  margin-inline: -10px;
+  background: color-mix(in oklab, var(--primary) 9%, transparent);
+  box-shadow: inset 2.5px 0 0 var(--primary);
+}
+
+.scratch-block-readonly {
+  opacity: 0.4;
+  cursor: default;
+  user-select: none;
+  pointer-events: none;
+}
+
+.scratch-inactive-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-inline: -1px;
+  border-radius: 1px;
+  vertical-align: text-bottom;
+  background: color-mix(in oklab, var(--primary) 70%, transparent);
+}

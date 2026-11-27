@@ -420,7 +420,7 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
 });
 
 it.effect(
-  "recovery closes a secret card but leaves link and feedback cards and an unread steer open",
+  "recovery closes a secret card but leaves link, email, and feedback cards and an unread steer open",
   () => {
     const threadId = ThreadId.make("thread_secret_recovery");
     const runId = RunId.make("run_secret_recovery");
@@ -468,6 +468,24 @@ it.effect(
           linkStatus: "pending",
           url: "https://box.example.ts.net",
           reason: "Run the suite there.",
+        },
+        {
+          id: "turn-item:email-request:recovery",
+          threadId,
+          runId,
+          nodeId: null,
+          type: "email_request",
+          status: "waiting",
+          emailStatus: "pending",
+          accounts: [{ name: "school", from: "Ada <ada@school.edu>" }],
+          draft: {
+            account: "school",
+            to: ["prof@school.edu"],
+            cc: [],
+            bcc: [],
+            subject: "Office hours",
+            body: "Hi",
+          },
         },
         {
           id: "turn-item:feedback-request:recovery",
@@ -524,12 +542,13 @@ it.effect(
       const secret = cards.find((card) => card.type === "secret_request");
       assert.equal(secret?.status, "cancelled");
       assert.equal(secret?.type === "secret_request" ? secret.secretStatus : null, "cancelled");
-      // Nothing in memory waits on a link or feedback card; the user can still answer it.
+      // Nothing in memory waits on link, email, or feedback cards; the user can still answer them.
       // Claude never reported reading the steer, so the orchestrator queues it.
       assert.deepEqual(
         cards.filter(
           (card) =>
             card.type === "link_request" ||
+            card.type === "email_request" ||
             card.type === "feedback_request" ||
             card.type === "user_message",
         ),

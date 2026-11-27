@@ -10,6 +10,7 @@ import {
   createAttachmentId,
   createDeterministicAttachmentId,
   createPendingAttachmentId,
+  createScratchAttachmentId,
   parseAttachmentUuid,
   planAttachmentClaim,
   parseThreadSegmentFromAttachmentId,
@@ -77,6 +78,40 @@ describe("attachmentStore", () => {
     );
   });
 
+  it("gives scratch images their own segment and escapes it for thread names", () => {
+    const scratchId = createScratchAttachmentId(".png");
+    expect(scratchId).toMatch(/^scratch-[0-9a-f-]{36}-png$/);
+    expect(parseThreadSegmentFromAttachmentId(scratchId)).toBe("scratch");
+    expect(parseAttachmentUuid(scratchId)).not.toBeNull();
+
+    expect(parseThreadSegmentFromAttachmentId(createAttachmentId("scratch")!)).toBe("_scratch");
+  });
+
+  it("plans scratch image claims into the sending thread without touching the scratch id", () => {
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-scratch-claim-"),
+    );
+    try {
+      const uuid = "00000000-0000-4000-8000-000000000004";
+      const scratchPath = NodePath.join(attachmentsDir, `scratch-${uuid}.png`);
+      NodeFS.writeFileSync(scratchPath, Buffer.from("pixels"));
+
+      const claim = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-1",
+        attachmentId: `scratch-${uuid}`,
+      });
+      expect(claim).toMatchObject({ ok: true, currentPath: scratchPath });
+      if (!claim.ok) {
+        return;
+      }
+      expect(parseThreadSegmentFromAttachmentId(claim.finalId)).toBe("thread-1");
+      expect(claim.finalId).not.toBe(`scratch-${uuid}`);
+    } finally {
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
   it("plans pending attachment claims with direct filename lookups", () => {
     const attachmentsDir = NodeFS.mkdtempSync(
       NodePath.join(NodeOS.tmpdir(), "t3code-attachment-claim-"),
@@ -135,8 +170,16 @@ describe("attachmentStore", () => {
       const pendingFilePath = NodePath.join(attachmentsDir, `pending-${uuid}-pdf.pdf`);
       const sidecarPath = `${pendingFilePath}.txt`;
       const threadPath = NodePath.join(attachmentsDir, `thread-1-${uuid}.png`);
+      const scratchPath = NodePath.join(attachmentsDir, `scratch-${uuid}.png`);
       const partialPath = NodePath.join(attachmentsDir, `${uuid}.part`);
-      for (const filePath of [pendingPath, pendingFilePath, sidecarPath, threadPath, partialPath]) {
+      for (const filePath of [
+        pendingPath,
+        pendingFilePath,
+        sidecarPath,
+        threadPath,
+        scratchPath,
+        partialPath,
+      ]) {
         NodeFS.writeFileSync(filePath, Buffer.from("pixels"));
         NodeFS.utimesSync(filePath, oldTimeSeconds, oldTimeSeconds);
       }
@@ -147,6 +190,7 @@ describe("attachmentStore", () => {
       expect(NodeFS.existsSync(sidecarPath)).toBe(false);
       expect(NodeFS.existsSync(partialPath)).toBe(false);
       expect(NodeFS.existsSync(threadPath)).toBe(true);
+      expect(NodeFS.existsSync(scratchPath)).toBe(true);
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }

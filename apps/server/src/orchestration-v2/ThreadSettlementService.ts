@@ -19,6 +19,7 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -29,6 +30,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as GitManager from "../git/GitManager.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -54,6 +56,7 @@ export interface SettlementPullRequest {
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
+const SETTLED_PREVIEW_CLOSE_DELAY = "5 minutes";
 
 function toMillis(value: DateTime.Utc | null | undefined): number | null {
   return value == null ? null : DateTime.toEpochMillis(value);
@@ -363,9 +366,18 @@ export const make = Effect.gen(function* () {
     quietOpenReadAt.clear();
   });
   const terminals = yield* TerminalManager.TerminalManager;
+  const previews = yield* PreviewManager.PreviewManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
   const settleActionRunAt = new Map<ThreadId, number>();
+  // Keep delayed preview closes out of `threadSweeps` so `drain` does not wait for the grace period.
+  const settledPreviewCloses = yield* FiberSet.make<void>();
+  interface PendingPreviewClose {
+    readonly token: object;
+    readonly fiber: Fiber.Fiber<void, never>;
+  }
+  const previewCloseHandledAt = new Map<ThreadId, number>();
+  const pendingPreviewCloses = new Map<ThreadId, PendingPreviewClose>();
   const noPullRequestRechecks = makeNoPullRequestRechecks();
 
   const sweep = Effect.fn("ThreadSettlementServiceV2.sweep")(function* (
@@ -795,11 +807,103 @@ export const make = Effect.gen(function* () {
       return sweepThread(threadId).pipe(FiberSet.run(threadSweeps), Effect.asVoid);
     });
 
+  const cancelSettledPreviewClose = (threadId: ThreadId) =>
+    Effect.suspend(() => {
+      previewCloseHandledAt.delete(threadId);
+      const pending = pendingPreviewCloses.get(threadId);
+      if (pending === undefined) return Effect.void;
+      pendingPreviewCloses.delete(threadId);
+      return Fiber.interrupt(pending.fiber).pipe(Effect.forkDetach, Effect.asVoid);
+    });
+
+  // Start the grace period from the settlement event, not settledAt, because auto-settle can
+  // backdate settledAt to the thread's last activity.
+  const scheduleSettledPreviewClose = Effect.fn(
+    "ThreadSettlementServiceV2.scheduleSettledPreviewClose",
+  )(function* (threadId: ThreadId, settledAtMs: number, eventOccurredAtMs: number) {
+    if (previewCloseHandledAt.get(threadId) === settledAtMs) return;
+    const existing = pendingPreviewCloses.get(threadId);
+    if (existing !== undefined) {
+      pendingPreviewCloses.delete(threadId);
+      yield* Fiber.interrupt(existing.fiber).pipe(Effect.forkDetach);
+    }
+    const { sessions } = yield* previews.list({ threadId, openedAtOrBeforeMs: eventOccurredAtMs });
+    previewCloseHandledAt.set(threadId, settledAtMs);
+    const tabIds = sessions.map((session) => session.tabId);
+    if (tabIds.length === 0) return;
+
+    const token = {};
+    const closeAfterGrace = Effect.gen(function* () {
+      yield* Effect.sleep(SETTLED_PREVIEW_CLOSE_DELAY);
+      if (pendingPreviewCloses.get(threadId)?.token !== token) return;
+      const current = yield* projections.getThread(threadId).pipe(
+        Effect.catchTags({
+          ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+        }),
+      );
+      if (pendingPreviewCloses.get(threadId)?.token !== token) return;
+      if (
+        current === null ||
+        current.deletedAt !== null ||
+        current.settledOverride !== "settled" ||
+        toMillis(current.settledAt) !== settledAtMs
+      ) {
+        if (previewCloseHandledAt.get(threadId) === settledAtMs) {
+          previewCloseHandledAt.delete(threadId);
+        }
+        return;
+      }
+      // Once teardown starts, finish publishing `closed` so cancellation cannot leave a tab half-closed.
+      pendingPreviewCloses.delete(threadId);
+      yield* Effect.uninterruptible(
+        Effect.forEach(
+          tabIds,
+          (tabId) =>
+            previews.close({ threadId, tabId }).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.interrupt
+                  : Effect.logWarning("closing a settled thread preview tab failed", {
+                      threadId,
+                      tabId,
+                      cause: Cause.pretty(cause),
+                    }),
+              ),
+            ),
+          { concurrency: "unbounded", discard: true },
+        ),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("closing settled thread previews failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (pendingPreviewCloses.get(threadId)?.token === token) {
+            pendingPreviewCloses.delete(threadId);
+          }
+        }),
+      ),
+    );
+
+    const fiber = yield* FiberSet.run(settledPreviewCloses)(closeAfterGrace);
+    pendingPreviewCloses.set(threadId, { token, fiber });
+  });
+
   // Skip settle scripts in shared checkouts where other threads may still work.
   const cleanUpSettledThread = Effect.fn("ThreadSettlementServiceV2.cleanUpSettledThread")(
-    function* (threadId: ThreadId) {
+    function* (threadId: ThreadId, eventSettledAtMs: number | null, eventOccurredAtMs: number) {
       const settled = yield* projections.getThread(threadId);
       if (settled.deletedAt !== null || settled.settledOverride !== "settled") return;
+      const settledAtMs = toMillis(settled.settledAt);
+      if (settledAtMs !== null && (eventSettledAtMs === null || settledAtMs === eventSettledAtMs)) {
+        yield* scheduleSettledPreviewClose(threadId, settledAtMs, eventOccurredAtMs);
+      }
       yield* terminals.closeOnSettle({ threadId });
       const worktreePath = settled.worktreePath;
       if (worktreePath === null) return;
@@ -820,8 +924,10 @@ export const make = Effect.gen(function* () {
       // Recheck after closing and worktree I/O; only live, settled threads may run scripts.
       const thread = yield* projections.getThread(threadId);
       if (thread.deletedAt !== null || thread.settledOverride !== "settled") return;
-      const settledAtMs = toMillis(thread.settledAt);
-      if (settledAtMs === null || settleActionRunAt.get(threadId) === settledAtMs) return;
+      const scriptSettledAtMs = toMillis(thread.settledAt);
+      if (scriptSettledAtMs === null || settleActionRunAt.get(threadId) === scriptSettledAtMs) {
+        return;
+      }
       // The parent's worktree belongs to the parent; shared-worktree children
       // skip duplicate cleanup there.
       if (
@@ -842,7 +948,7 @@ export const make = Effect.gen(function* () {
         trigger: "settle",
         observeCompletion: {},
       });
-      settleActionRunAt.set(threadId, settledAtMs);
+      settleActionRunAt.set(threadId, scriptSettledAtMs);
       if (run.status === "started" && run.completion) {
         yield* run.completion.pipe(Effect.forkDetach);
       }
@@ -863,10 +969,18 @@ export const make = Effect.gen(function* () {
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.settled":
-        return cleanUpSettledThread(event.threadId).pipe(Effect.andThen(enqueueFullSweep()));
+        return cleanUpSettledThread(
+          event.threadId,
+          toMillis(event.payload.settledAt),
+          DateTime.toEpochMillis(event.occurredAt),
+        ).pipe(Effect.andThen(enqueueFullSweep()));
+      case "thread.unsettled":
+      case "thread.pinned":
+        return cancelSettledPreviewClose(event.threadId);
       case "thread.archived":
-      case "thread.deleted":
         return enqueueFullSweep();
+      case "thread.deleted":
+        return cancelSettledPreviewClose(event.threadId).pipe(Effect.andThen(enqueueFullSweep()));
       case "thread.pull-request-link-updated":
       case "thread.pull-request-synced":
       case "thread.issue-synced":

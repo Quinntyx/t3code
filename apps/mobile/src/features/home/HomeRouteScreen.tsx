@@ -12,7 +12,16 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 
 import { LiquidGlassTarget } from "../../native/LiquidGlass";
 import { useProjects } from "../../state/entities";
-import { steadyNavigationThreadShellsAtom } from "../../state/threads";
+import { useEnvironmentShellError } from "../../state/shell";
+import {
+  steadyFreshEnvironmentIdsAtom,
+  steadyNavigationThreadShellsAtom,
+  syncingShellEnvironmentIdsAtom,
+} from "../../state/threads";
+import {
+  filterFreshThreads,
+  resolveSingleScopedEnvironmentId,
+} from "../threads/thread-list-skeleton-state";
 import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -22,6 +31,7 @@ import {
 } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
+import { deriveSelectedEnvironmentEmptyState } from "./home-empty-state";
 import { useHomeListOptions } from "./home-list-options";
 import {
   runWhenHomeCovered,
@@ -54,9 +64,10 @@ export function HomeRouteScreen() {
   const projects = useProjects();
   // Stop rebuilding the streaming thread list while Thread covers Home.
   const visible = useHomeRouteVisible();
-  const threads = useLaunchingThreads(
-    useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible),
-  );
+  const freshEnvironmentIds = useAtomValueWhileVisible(steadyFreshEnvironmentIdsAtom, visible);
+  const syncingEnvironmentIds = useAtomValueWhileVisible(syncingShellEnvironmentIdsAtom, visible);
+  const rawThreads = useAtomValueWhileVisible(steadyNavigationThreadShellsAtom, visible);
+  const threads = useLaunchingThreads(filterFreshThreads(rawThreads, freshEnvironmentIds));
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
@@ -150,8 +161,32 @@ export function HomeRouteScreen() {
     [projectScopes, threads],
   );
   const { showHidden, setShowHidden } = useHiddenThreads();
-  const selectedProjectKey =
-    resolveHomeProjectFilterScope(projectScopes, projects, listOptions)?.key ?? null;
+  const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, listOptions);
+  const selectedProjectKey = selectedProjectScope?.key ?? null;
+  const scopedUnavailableEnvironmentId = resolveSingleScopedEnvironmentId({
+    selectedEnvironmentId,
+    projectRefs: selectedProjectScope?.projectRefs ?? null,
+  });
+  const selectedEnvironmentShellError = useEnvironmentShellError(scopedUnavailableEnvironmentId);
+  const selectedEnvironment =
+    scopedUnavailableEnvironmentId === null
+      ? null
+      : (workspaceEnvironments.find(
+          (environment) => environment.environmentId === scopedUnavailableEnvironmentId,
+        ) ?? null);
+  const selectedEnvironmentUnavailable =
+    selectedEnvironment === null
+      ? null
+      : deriveSelectedEnvironmentEmptyState(
+          {
+            networkStatus: catalogState.networkStatus,
+            environment: selectedEnvironment,
+            hasFreshSnapshot: freshEnvironmentIds.has(selectedEnvironment.environmentId),
+            isActivelySyncing: syncingEnvironmentIds.has(selectedEnvironment.environmentId),
+            shellError: selectedEnvironmentShellError,
+          },
+          m,
+        );
 
   if (layout.usesSplitView && !nativePrimaryColumn) {
     return (
@@ -236,7 +271,10 @@ export function HomeRouteScreen() {
             savedConnectionsById={savedConnectionsById}
             searchQuery={searchQuery}
             selectedEnvironmentId={selectedEnvironmentId}
+            selectedEnvironmentUnavailable={selectedEnvironmentUnavailable}
             selectedProjectKey={selectedProjectKey}
+            freshEnvironmentIds={freshEnvironmentIds}
+            syncingEnvironmentIds={syncingEnvironmentIds}
             threads={threads}
             visible={visible}
           />

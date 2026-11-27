@@ -6,6 +6,7 @@ import { EditorState, TextSelection } from "@tiptap/pm/state";
 import { splitBlockKeepMarks } from "@tiptap/pm/commands";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { formatScratchImageMarkdown } from "@t3tools/shared/scratchDocument";
 
 import {
   collapseExpandedComposerCursor,
@@ -18,6 +19,7 @@ import {
   buildTiptapContent,
   caretTakesMarksBefore,
   ComposerBlockExtensions,
+  ComposerScratchImageExtension,
   ComposerCodeBlockExtension,
   ComposerListExtensions,
   ComposerBoldExtension,
@@ -1525,5 +1527,58 @@ describe("surroundSelectionWithMark", () => {
     doc.check();
     const state = EditorState.create({ doc });
     expect(surroundSelectionWithMark(state, 1, doc.content.size - 1, "`")).toBeNull();
+  });
+});
+
+const scratchSchema = getSchemaByResolvedExtensions(
+  resolveExtensions([
+    StarterKit.configure({
+      blockquote: false,
+      bulletList: false,
+      codeBlock: false,
+      heading: false,
+      horizontalRule: false,
+      listItem: false,
+      orderedList: false,
+      dropcursor: false,
+      gapcursor: false,
+      trailingNode: false,
+      code: false,
+    }),
+    ComposerScratchImageExtension,
+  ]),
+);
+
+function scratchDoc(value: string) {
+  return scratchSchema.nodeFromJSON(
+    buildDocJson(value, (name) => ({ label: name, description: null }), {
+      enableScratchImages: true,
+    }),
+  );
+}
+
+describe("scratch image blocks", () => {
+  it("round-trips a standalone image line", () => {
+    const source = "Intro\n\n![first](t3-scratch-image://img1)\n\nAfter";
+    expect(serializeEditorDoc(scratchDoc(source)).value).toBe(source);
+  });
+
+  it("keeps the alt text through a round trip", () => {
+    const source = formatScratchImageMarkdown("img1", "a [bracket]");
+    expect(serializeEditorDoc(scratchDoc(source)).value).toBe(source);
+  });
+
+  it("maps the atom to one flat unit spanning its markdown line", () => {
+    const map = serializeEditorDoc(scratchDoc("![first](t3-scratch-image://img1)"));
+    expect(map.docLength).toBe(1);
+    expect(map.value).toBe("![first](t3-scratch-image://img1)");
+  });
+
+  it("leaves image lines as text when disabled", () => {
+    const source = "![first](t3-scratch-image://img1)";
+    const doc = scratchSchema.nodeFromJSON(
+      buildDocJson(source, (name) => ({ label: name, description: null })),
+    );
+    expect(serializeEditorDoc(doc).value).toBe(source);
   });
 });

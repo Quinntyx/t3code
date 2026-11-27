@@ -79,7 +79,6 @@ import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/s
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as ProviderInstallation from "./provider/providerInstallation.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -137,6 +136,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as Workflows from "./workflows/Workflows.ts";
 import * as WorkflowRuntime from "./workflows/WorkflowRuntime.ts";
+import * as ScratchService from "./scratch/ScratchService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as EmailRequests from "./email/EmailRequests.ts";
 import * as Mailer from "./email/Mailer.ts";
@@ -847,7 +847,6 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(AcpRegistrySessions.AcpRegistrySessions)({}),
   Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
-  Layer.mock(AnalyticsService.AnalyticsService)({}),
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
   Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
@@ -980,11 +979,11 @@ it.live.each([
           markDisconnected: () => Effect.void,
           awaitInvalidation: () => Effect.never,
         }),
-        Layer.mock(AnalyticsService.AnalyticsService)({ recordOwners: () => Effect.void }),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           namedProjectsRoot: process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ScratchService.Scratch)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
         Layer.mock(UsageLimitSources.UsageLimitSources)({}),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
@@ -1128,6 +1127,7 @@ it.effect.each([
           namedProjectsRoot: process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ScratchService.Scratch)({}),
         Layer.mock(ServerEnvironment.ServerEnvironment)({
           getDescriptor: Effect.succeed({
             environmentId: EnvironmentId.make("config-test"),
@@ -1179,7 +1179,6 @@ it.effect.each([
               method: "browser-session-cookie",
               scopes: [],
             },
-            {},
             yield* ServerBrowser.ServerBrowser,
             () => Effect.void,
             { secretReferences: true },
@@ -1334,7 +1333,6 @@ it.effect("access changes made while the snapshot loads reach the client after i
             method: "browser-session-cookie",
             scopes: [],
           },
-          {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1352,6 +1350,7 @@ it.effect("access changes made while the snapshot loads reach the client after i
                 namedProjectsRoot: "/unused",
               }),
               Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+              Layer.mock(ScratchService.Scratch)({}),
               Layer.mock(ServerEnvironment.ServerEnvironment)({}),
               Layer.mock(EnvironmentAuth.EnvironmentAuth)({
                 listPairingLinks: () => Effect.succeed([]),
@@ -1509,6 +1508,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({
         getDescriptor: Effect.succeed({
           environmentId: EnvironmentId.make("config-test"),
@@ -1550,7 +1550,6 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
             method: "browser-session-cookie",
             scopes: [],
           },
-          {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1889,6 +1888,7 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
         namedProjectsRoot: process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -1912,7 +1912,6 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
             method: "browser-session-cookie",
             scopes: [],
           },
-          {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -1975,6 +1974,7 @@ it.effect("a git action that fails partway still refreshes the repository status
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -1991,7 +1991,6 @@ it.effect("a git action that fails partway still refreshes the repository status
             method: "browser-session-cookie",
             scopes: [AuthSourceControlWriteScope],
           },
-          {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -2055,6 +2054,7 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
     );
@@ -2071,7 +2071,6 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
             method: "browser-session-cookie",
             scopes: [AuthSourceControlWriteScope],
           },
-          {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -2555,6 +2554,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+      Layer.mock(ScratchService.Scratch)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
       Layer.mock(ProjectService.ProjectService)({
@@ -2604,7 +2604,6 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
             method: "browser-session-cookie",
             scopes: [],
           },
-          {},
           yield* ServerBrowser.ServerBrowser,
           () => Effect.void,
           { secretReferences: true },
@@ -2728,6 +2727,7 @@ const makeWorkflowClient = Effect.fn("test.makeWorkflowClient")(function* (
     Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
     Layer.mock(DirectEndpoints.DirectEndpoints)({}),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+    Layer.mock(ScratchService.Scratch)({}),
     Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
     Layer.mock(ServerEnvironment.ServerEnvironment)({}),
     Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
@@ -2751,7 +2751,6 @@ const makeWorkflowClient = Effect.fn("test.makeWorkflowClient")(function* (
           method: "browser-session-cookie",
           scopes: [...scopes],
         },
-        {},
         yield* ServerBrowser.ServerBrowser,
         () => Effect.void,
         { secretReferences: true },

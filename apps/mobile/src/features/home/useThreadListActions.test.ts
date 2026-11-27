@@ -86,26 +86,28 @@ vi.mock("../../state/atom-registry", async () => {
           ? state.dropBusy
           : atom === "steady-shells-holding"
             ? state.holdingRows
-            : atom === "thread-shells"
-              ? state.shells
-              : atom === "queued-thread-keys"
-                ? new Set<string>()
-                : new Map(
-                    [...state.scopes.keys()].map((environmentId) => [
-                      environmentId,
-                      {
-                        environment: {
-                          capabilities: {
-                            threadSettlement: true,
-                            threadSnooze: true,
-                            threadPinning: true,
-                            threadPinReorder: true,
-                            threadTitleRegeneration: true,
+            : atom === "steady-fresh-environments"
+              ? new Set(state.shells.map((row) => row.environmentId))
+              : atom === "thread-shells"
+                ? state.shells
+                : atom === "queued-thread-keys"
+                  ? new Set<string>()
+                  : new Map(
+                      [...state.scopes.keys()].map((environmentId) => [
+                        environmentId,
+                        {
+                          environment: {
+                            capabilities: {
+                              threadSettlement: true,
+                              threadSnooze: true,
+                              threadPinning: true,
+                              threadPinReorder: true,
+                              threadTitleRegeneration: true,
+                            },
                           },
                         },
-                      },
-                    ]),
-                  ),
+                      ]),
+                    ),
   };
   // Real atoms such as composerDraftsAtom go to a real registry; strings are stubbed state.
   return {
@@ -143,6 +145,7 @@ vi.mock("../../state/thread-order", () => ({
 }));
 vi.mock("../../state/threads", () => ({
   environmentThreadShells: { threadShellsAtom: "thread-shells" },
+  steadyFreshEnvironmentIdsAtom: "steady-fresh-environments",
   steadyNavigationThreadShellsAtom: "thread-shells",
   steadyShellsHoldingAtom: "steady-shells-holding",
   threadEnvironment: Object.fromEntries(

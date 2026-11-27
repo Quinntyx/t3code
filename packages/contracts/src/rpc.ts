@@ -145,6 +145,24 @@ import {
   PersistChatAttachmentsResult,
 } from "./chatAttachment.ts";
 import {
+  ScratchConsumeChunkInput,
+  ScratchConsumeChunkResult,
+  ScratchCreateImageUploadUrlInput,
+  ScratchCreateImageUploadUrlResult,
+  ScratchDocumentSnapshot,
+  ScratchGetInput,
+  ScratchRevisionConflictError,
+  ScratchSaveInput,
+  ScratchSaveResult,
+  ScratchSetCursorInput,
+  ScratchSetCursorResult,
+  ScratchStorageError,
+  ScratchSubscribeInput,
+  ScratchSummariesStreamEvent,
+  ScratchStreamEvent,
+  ScratchValidationError,
+} from "./scratch.ts";
+import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetTurnDiffError,
 } from "./checkpointDiff.ts";
@@ -533,6 +551,14 @@ export const WS_METHODS = {
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
+
+  scratchGet: "scratch.get",
+  scratchSubscribe: "scratch.subscribe",
+  scratchSubscribeSummaries: "scratch.subscribeSummaries",
+  scratchSave: "scratch.save",
+  scratchSetCursor: "scratch.setCursor",
+  scratchConsumeChunk: "scratch.consumeChunk",
+  scratchCreateImageUploadUrl: "scratch.createImageUploadUrl",
 
   mcpAppsCallTool: "mcpApps.callTool",
   mcpAppsToolInfo: "mcpApps.toolInfo",
@@ -1835,6 +1861,59 @@ const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsScratchGetRpc = Rpc.make(WS_METHODS.scratchGet, {
+  payload: ScratchGetInput,
+  success: ScratchDocumentSnapshot,
+  error: Schema.Union([ScratchStorageError, EnvironmentAuthorizationError]),
+});
+
+const WsScratchSubscribeRpc = Rpc.make(WS_METHODS.scratchSubscribe, {
+  payload: ScratchSubscribeInput,
+  success: ScratchStreamEvent,
+  error: Schema.Union([ScratchStorageError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsScratchSubscribeSummariesRpc = Rpc.make(WS_METHODS.scratchSubscribeSummaries, {
+  success: ScratchSummariesStreamEvent,
+  error: Schema.Union([ScratchStorageError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsScratchSaveRpc = Rpc.make(WS_METHODS.scratchSave, {
+  payload: ScratchSaveInput,
+  success: ScratchSaveResult,
+  error: Schema.Union([
+    ScratchRevisionConflictError,
+    ScratchValidationError,
+    ScratchStorageError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsScratchSetCursorRpc = Rpc.make(WS_METHODS.scratchSetCursor, {
+  payload: ScratchSetCursorInput,
+  success: ScratchSetCursorResult,
+  error: Schema.Union([ScratchValidationError, ScratchStorageError, EnvironmentAuthorizationError]),
+});
+
+const WsScratchConsumeChunkRpc = Rpc.make(WS_METHODS.scratchConsumeChunk, {
+  payload: ScratchConsumeChunkInput,
+  success: ScratchConsumeChunkResult,
+  error: Schema.Union([
+    ScratchRevisionConflictError,
+    ScratchValidationError,
+    ScratchStorageError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+const WsScratchCreateImageUploadUrlRpc = Rpc.make(WS_METHODS.scratchCreateImageUploadUrl, {
+  payload: ScratchCreateImageUploadUrlInput,
+  success: ScratchCreateImageUploadUrlResult,
+  error: Schema.Union([ScratchValidationError, ScratchStorageError, EnvironmentAuthorizationError]),
+});
+
 const WsMcpAppsCallToolRpc = Rpc.make(WS_METHODS.mcpAppsCallTool, {
   payload: McpAppCallToolInput,
   success: McpAppCallToolResult,
@@ -2753,6 +2832,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsCreateUrlRpc,
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,
+  WsScratchGetRpc,
+  WsScratchSubscribeRpc,
+  WsScratchSubscribeSummariesRpc,
+  WsScratchSaveRpc,
+  WsScratchSetCursorRpc,
+  WsScratchConsumeChunkRpc,
+  WsScratchCreateImageUploadUrlRpc,
   WsAttachmentsDeleteRpc,
   WsMcpAppsCallToolRpc,
   WsMcpAppsToolInfoRpc,

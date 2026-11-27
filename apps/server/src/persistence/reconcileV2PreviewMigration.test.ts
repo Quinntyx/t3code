@@ -93,6 +93,8 @@ describe("V2 preview upgrade", () => {
         [111, "VoiceNotificationIndex"],
         [112, "SubagentLineageIndex"],
         [113, "OverloadedFailureIndex"],
+        [114, "WaitingEmailRequestIndex"],
+        [115, "ScratchDocuments"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -229,6 +231,8 @@ describe("V2 preview upgrade", () => {
         [111, "VoiceNotificationIndex"],
         [112, "SubagentLineageIndex"],
         [113, "OverloadedFailureIndex"],
+        [114, "WaitingEmailRequestIndex"],
+        [115, "ScratchDocuments"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

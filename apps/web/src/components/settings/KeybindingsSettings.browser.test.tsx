@@ -149,7 +149,7 @@ it("unassigns a default shortcut and restores its condition when one is assigned
         environmentId: "env",
         input: expect.objectContaining({
           command: "composer.sendBackground",
-          when: "composerFocus && draftThreadRoute",
+          when: "(composerFocus || scratchArmed) && draftThreadRoute",
           replace: { command: "composer.sendBackground", key: "mod+alt+enter", when: "false" },
         }),
       });

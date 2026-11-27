@@ -29,7 +29,13 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { runStream, subscribe, subscribeDynamicWithSession, refreshVcsBranch } from "./client.ts";
+import {
+  runStream,
+  subscribe,
+  subscribeDynamicWithSession,
+  subscribeDynamicWithSubscription,
+  refreshVcsBranch,
+} from "./client.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -548,6 +554,75 @@ describe("environment RPC", () => {
         yield* Fiber.interrupt(subscriptionFiber);
 
         expect(inputs).toBe(2);
+      }),
+  );
+
+  it.effect(
+    "tags same-session resubscribes with distinct tokens so buffered prior-stream items are distinguishable",
+    () =>
+      Effect.gen(function* () {
+        const resubscribe = yield* Queue.unbounded<void>();
+        const tokens: object[] = [];
+        const secondStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const firstConsumed = yield* Deferred.make<void>();
+        const observed: Array<readonly [object, unknown]> = [];
+        let attempts = 0;
+
+        const client = {
+          [WS_METHODS.subscribeServerLifecycle]: () => {
+            attempts += 1;
+            if (attempts === 1) {
+              return Stream.make(
+                { source: "first-1" } as unknown as ServerLifecycleStreamEvent,
+                { source: "first-2" } as unknown as ServerLifecycleStreamEvent,
+              ).pipe(Stream.concat(Stream.never));
+            }
+            return Stream.make({
+              source: "second-1",
+            } as unknown as ServerLifecycleStreamEvent).pipe(Stream.concat(Stream.never));
+          },
+        } as unknown as WsRpcProtocolClient;
+        const { activeSession, supervisor } = yield* makeHarness();
+        yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+
+        const fiber = yield* subscribeDynamicWithSubscription(
+          WS_METHODS.subscribeServerLifecycle,
+          (_session, token) =>
+            Effect.sync(() => {
+              tokens.push(token);
+              if (tokens.length === 2) Deferred.doneUnsafe(secondStarted, Effect.void);
+              return {};
+            }),
+          { resubscribe: Stream.fromQueue(resubscribe) },
+        ).pipe(
+          Stream.runForEach(([token, value]) =>
+            Effect.gen(function* () {
+              observed.push([token, value]);
+              if (observed.length === 1) {
+                yield* Deferred.succeed(firstConsumed, undefined);
+                yield* Deferred.await(releaseFirst);
+              }
+            }),
+          ),
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(firstConsumed);
+        // Trigger a same-session resubscribe while the first subscription is active and downstream is gated.
+        yield* Queue.offer(resubscribe, undefined);
+        yield* Deferred.await(secondStarted);
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* TestClock.adjust("1 millis");
+        yield* Fiber.interrupt(fiber);
+
+        expect(tokens).toHaveLength(2);
+        expect(tokens[0]).not.toBe(tokens[1]);
+        for (const [token, value] of observed) {
+          const source = (value as { readonly source: string }).source;
+          expect(token).toBe(source.startsWith("first-") ? tokens[0] : tokens[1]);
+        }
       }),
   );
 });

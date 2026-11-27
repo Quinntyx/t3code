@@ -1,3 +1,5 @@
+import { AVAILABLE_CONNECTION_STATE } from "@t3tools/client-runtime/connection";
+import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import { createChildThreadApprovalsAtom } from "@t3tools/client-runtime/state/thread-requests";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -26,6 +28,7 @@ import {
 import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
+import { isEnvironmentActivelySyncingShell } from "./workspaceModel";
 
 export const threadFamilies = createThreadFamilyAtoms(
   connectionAtomRuntime,
@@ -61,6 +64,49 @@ const steadyShells = createSteadyShellAtoms({
  * changes once when environments connect, not once per environment.
  */
 export const steadyShellsHoldingAtom = steadyShells.holdingAtom;
+/** Enabled environments whose displayed steady snapshot is from a live sync in this session. */
+export const steadyFreshEnvironmentIdsAtom = steadyShells.freshEnvironmentIdsAtom;
+
+const EMPTY_ENVIRONMENT_ID_SET: ReadonlySet<EnvironmentId> = new Set();
+
+/**
+ * Enabled environments whose displayed steady snapshot is not yet fresh and which are
+ * actively performing a clean connect, shell sync, or steady-shell release (excluding
+ * failed backoff retries, offline, blocked, and shell subscription errors).
+ */
+export const syncingShellEnvironmentIdsAtom = (() => {
+  let previous: ReadonlySet<EnvironmentId> = EMPTY_ENVIRONMENT_ID_SET;
+  return Atom.make((get) => {
+    const catalog = get(environmentCatalog.catalogValueAtom);
+    if (!catalog.isReady || get(environmentCatalog.networkStatusValueAtom) === "offline") {
+      previous = EMPTY_ENVIRONMENT_ID_SET;
+      return previous;
+    }
+    const freshIds = get(steadyFreshEnvironmentIdsAtom);
+    const next = new Set<EnvironmentId>();
+    for (const environmentId of enabledEnvironmentIds(catalog)) {
+      if (freshIds.has(environmentId)) continue;
+      const connection = AsyncResult.getOrElse(
+        get(environmentCatalog.stateAtom(environmentId)),
+        () => AVAILABLE_CONNECTION_STATE,
+      );
+      const shell = get(environmentShell.stateValueAtom(environmentId));
+      if (
+        isEnvironmentActivelySyncingShell({
+          connection,
+          shell,
+          isSteadyFresh: false,
+        })
+      ) {
+        next.add(environmentId);
+      }
+    }
+    if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+    previous = next;
+    return next;
+  }).pipe(Atom.withLabel("mobile-syncing-shell-environment-ids"));
+})();
+
 export const steadyNavigationThreadShellsAtom = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: steadyShells.snapshotAtom,

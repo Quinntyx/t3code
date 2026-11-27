@@ -37,7 +37,12 @@ function sameConnection(
   left: EnvironmentConnectionPresentation,
   right: EnvironmentConnectionPresentation,
 ): boolean {
-  return left.phase === right.phase && left.error === right.error && left.traceId === right.traceId;
+  return (
+    left.phase === right.phase &&
+    left.error === right.error &&
+    left.traceId === right.traceId &&
+    left.awaitingApproval === right.awaitingApproval
+  );
 }
 
 function sameRouteIds(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
@@ -212,6 +217,7 @@ export interface EnvironmentConnectionSummary {
   /** `connectionError` as marked text; display sites resolve it with `resolveMarkedText`. */
   readonly i18nConnectionError?: MarkedText;
   readonly connectionErrorTraceId: string | null;
+  readonly awaitingApproval?: true;
 }
 
 export function projectEnvironmentConnectionSummary(
@@ -230,6 +236,7 @@ export function projectEnvironmentConnectionSummary(
       ? {}
       : { i18nConnectionError: environment.connection.i18nError }),
     connectionErrorTraceId: environment.connection.traceId,
+    ...(environment.connection.awaitingApproval ? { awaitingApproval: true as const } : {}),
   };
 }
 

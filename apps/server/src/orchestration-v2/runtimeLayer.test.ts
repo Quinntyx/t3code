@@ -5536,11 +5536,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           yield* worker.drain();
           const wakes = (yield* texts).slice(before);
           assert.equal(wakes.length, names.length === 0 ? 0 : 1);
-          // The finished section lists every failing check, so only the failed one counts here.
-          const failedSections = wakes.map((text) => text.split("- Every check has finished")[0]!);
+          const failedSection = (text: string) =>
+            text.match(/- Checks failed[^\n]*\n((?:  - .*\n?)*)/)?.[1] ?? "";
           for (const name of ["lint", "test"]) {
             assert.equal(
-              failedSections.some((text) => text.includes(`  - ${name}`)),
+              wakes.some((text) => failedSection(text).includes(`  - ${name}`)),
               names.includes(name as never),
               `read ${index} told ${name}`,
             );
@@ -14429,6 +14429,61 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         const resumed = yield* orchestrator.getThreadProjection(early.threadId);
         assert.lengthOf(resumed.runs, 2);
         assert.isNull(resumed.thread.snoozedUntil);
+        // Switching to a different model on the same instance rejects an early resume and rotates
+        // the recovery request id so the normal reset-clock resume still runs when resetAt arrives.
+        const switched = yield* limitedThread("switched");
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("recovery:switch-model:switched"),
+          threadId: switched.threadId,
+          modelSelection: { ...modelSelection, model: "gpt-5.3-other" },
+        });
+        yield* orchestrator.dispatch(switched.resume);
+        const afterSwitchedEarly = yield* orchestrator.getThreadProjection(switched.threadId);
+        assert.lengthOf(afterSwitchedEarly.runs, 1);
+        assert.notEqual(
+          afterSwitchedEarly.thread.limitRecovery?.requestId,
+          switched.resume.usageLimitRecoveryRequestId,
+        );
+        // Switching to another provider instance with the same model also rejects and rotates
+        // requestId so switching back before resetAt preserves the clock-due resume.
+        const providerSwitched = yield* limitedThread("provider-switched");
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("recovery:switch-provider:away"),
+          threadId: providerSwitched.threadId,
+          modelSelection: {
+            ...modelSelection,
+            instanceId: alternateProviderInstance.instanceId,
+          },
+        });
+        yield* orchestrator.dispatch(providerSwitched.resume);
+        const afterProviderSwitched = yield* orchestrator.getThreadProjection(
+          providerSwitched.threadId,
+        );
+        assert.lengthOf(afterProviderSwitched.runs, 1);
+        assert.notEqual(
+          afterProviderSwitched.thread.limitRecovery?.requestId,
+          providerSwitched.resume.usageLimitRecoveryRequestId,
+        );
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("recovery:switch-provider:back"),
+          threadId: providerSwitched.threadId,
+          modelSelection,
+        });
+        yield* TestClock.setTime(Date.parse(resetAt));
+        const dueMs = DateTime.toEpochMillis(yield* DateTime.now);
+        const shellsAtReset = (yield* orchestrator.getShellSnapshot()).threads;
+        for (const id of [switched.threadId, providerSwitched.threadId]) {
+          const dueShell = shellsAtReset.find((thread) => thread.id === id)!;
+          const clockDue = limitRecoveryCommand(dueShell, true, dueMs, false);
+          assert(
+            clockDue?.type === "message.dispatch" && clockDue.usageLimitResetObserved !== true,
+          );
+          yield* orchestrator.dispatch(clockDue);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(id)).runs, 2);
+        }
       }),
   );
 

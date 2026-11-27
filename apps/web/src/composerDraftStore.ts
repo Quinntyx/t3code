@@ -81,9 +81,11 @@ import {
   ensureInlineContextReferences,
   formatInlineContextReference,
   removeInlineContextReference,
+  stripInlineContextReferences,
 } from "./lib/composerContextReferences";
 import {
   fileContextReference,
+  imageContextReference,
   previewAnnotationContextId,
   previewAnnotationContextReference,
   reviewCommentContextId,
@@ -780,7 +782,14 @@ interface ComposerDraftStoreState {
   ) => Promise<void>;
   clearComposerContent: (threadRef: ComposerThreadTarget) => void;
   /** Clears text and attachments, preserving terminal/element contexts, preview annotations, and review comments. */
-  clearComposerPromptAndImages: (threadRef: ComposerThreadTarget) => void;
+  clearComposerPromptAndImages: (
+    threadRef: ComposerThreadTarget,
+    options?: {
+      readonly preserveFiles?: boolean;
+      readonly onlyImageIds?: ReadonlySet<string>;
+      readonly expectedStrippedPrompt?: string;
+    },
+  ) => void;
   /** Moves all user content into a destination that has none; otherwise leaves both drafts alone. */
   moveComposerContent: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
 }
@@ -4501,32 +4510,63 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        clearComposerPromptAndImages: (threadRef) => {
+        clearComposerPromptAndImages: (threadRef, options) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
           }
+          const preserveFiles = options?.preserveFiles === true;
+          const onlyImageIds = options?.onlyImageIds;
+          const expectedStrippedPrompt = options?.expectedStrippedPrompt;
           set((state) => {
             const current = state.draftsByThreadKey[threadKey];
             if (!current) {
               return state;
             }
-            for (const image of current.images) {
+            const removedImages =
+              onlyImageIds === undefined
+                ? current.images
+                : current.images.filter((image) => onlyImageIds.has(image.id));
+            const remainingImages =
+              onlyImageIds === undefined
+                ? []
+                : current.images.filter((image) => !onlyImageIds.has(image.id));
+            for (const image of removedImages) {
               revokeObjectPreviewUrl(image.previewUrl);
+            }
+            const remainingImageIds = new Set(remainingImages.map((image) => image.id));
+            let retainedBasePrompt =
+              expectedStrippedPrompt !== undefined &&
+              stripInlineContextReferences(current.prompt).trim() !== expectedStrippedPrompt
+                ? current.prompt
+                : "";
+            if (retainedBasePrompt.length > 0 && removedImages.length > 0) {
+              for (const image of removedImages) {
+                retainedBasePrompt = removeInlineContextReference(
+                  retainedBasePrompt,
+                  imageContextReference(image).contextId,
+                ).prompt;
+              }
             }
             const nextDraft: ComposerThreadDraftState = {
               ...current,
-              prompt: ensureInlineContextReferences("", [
+              prompt: ensureInlineContextReferences(retainedBasePrompt, [
+                ...remainingImages.map(imageContextReference),
+                ...(preserveFiles ? current.files.map(fileContextReference) : []),
                 ...current.terminalContexts.map(terminalContextReference),
                 ...current.reviewComments.map(reviewCommentContextReference),
                 ...current.threadContexts.map(threadContextReference),
                 ...current.environmentContexts.map(environmentContextReference),
                 ...current.previewAnnotations.map(previewAnnotationContextReference),
               ]),
-              images: [],
-              files: [],
-              nonPersistedImageIds: [],
-              persistedAttachments: [],
+              images: remainingImages,
+              files: preserveFiles ? current.files : [],
+              nonPersistedImageIds: current.nonPersistedImageIds.filter((id) =>
+                remainingImageIds.has(id),
+              ),
+              persistedAttachments: current.persistedAttachments.filter((attachment) =>
+                remainingImageIds.has(attachment.id),
+              ),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {

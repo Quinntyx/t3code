@@ -22,6 +22,7 @@ import {
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
+  type ChatImageAttachment,
   DEFAULT_MODEL,
   type EnvironmentId,
   type ModelSelection,
@@ -154,6 +155,13 @@ import type { useQueuedRunEdit } from "./useQueuedRunEdit";
 import type { useTimelineFollow } from "./useTimelineFollow";
 import type { useUsageLimitsPanel } from "./useUsageLimitsPanel";
 import type { useWorktreeSetup } from "./useWorktreeSetup";
+
+export interface ComposerScratchSendOverride {
+  readonly prompt: string;
+  readonly images: ReadonlyArray<ComposerImageAttachment>;
+  readonly serverAttachments?: ReadonlyArray<ChatImageAttachment>;
+  readonly onAccepted?: () => void;
+}
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 
@@ -426,15 +434,21 @@ export function useComposerSend(input: ComposerSendInput) {
       readonly prompt: string;
       readonly sendContext: ReturnType<NonNullable<ComposerHandleRef["current"]>["getSendContext"]>;
     },
+    scratchOverride?: ComposerScratchSendOverride,
   ) => {
     e?.preventDefault();
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
-    let promptAtSend = detachedOverride ? detachedOverride.prompt : promptRef.current;
+    let promptAtSend = scratchOverride
+      ? scratchOverride.prompt
+      : detachedOverride
+        ? detachedOverride.prompt
+        : promptRef.current;
     if (
       usageLimitsOffered &&
       usageLimitsKey !== null &&
       !directAnnotation &&
+      !scratchOverride &&
       !draftHasNonPromptContent(composerDraftTarget) &&
       countPreparingComposerImages(composerTargetKey(composerDraftTarget)) === 0 &&
       isUsageLimitsCommand(promptAtSend)
@@ -456,7 +470,7 @@ export function useComposerSend(input: ComposerSendInput) {
     const isCurrentRouteThread = () => currentRouteThreadKeyRef.current === routeThreadKey;
     // `/side` beats an open question and a plan follow-up, which would send the text to main.
     const sideChatCommand =
-      sendCtx && !directAnnotation && !queuedRunEdit.isEditing
+      sendCtx && !directAnnotation && !scratchOverride && !queuedRunEdit.isEditing
         ? parseSideChatCommand(promptAtSend)
         : null;
     const answeringQuestion =
@@ -465,7 +479,7 @@ export function useComposerSend(input: ComposerSendInput) {
       onSideChat !== undefined && sideChatCommand !== null && sideChatDisabledReason === null;
     // An answer responds to the open request rather than starting a turn, so the new-message
     // guards below (loading, busy, provider) must not swallow it.
-    if (answeringQuestion && !startsSideChat && !directAnnotation) {
+    if (answeringQuestion && !startsSideChat && !directAnnotation && !scratchOverride) {
       if (readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) && activeThread) {
         onAdvanceActivePendingUserInput();
       }
@@ -809,25 +823,36 @@ export function useComposerSend(input: ComposerSendInput) {
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
+    const scratchServerAttachments = scratchOverride?.serverAttachments ?? [];
     const { images: composerImages, previewAnnotations: composerPreviewAnnotations } =
-      mergeDirectPreviewAnnotation({
-        images: sendContextImages,
-        fileCount: composerFiles.length,
-        previewAnnotations: sendContextPreviewAnnotations,
-        direct: directAnnotation,
-      });
+      scratchOverride
+        ? { images: [...scratchOverride.images], previewAnnotations: [] }
+        : mergeDirectPreviewAnnotation({
+            images: sendContextImages,
+            fileCount: composerFiles.length,
+            previewAnnotations: sendContextPreviewAnnotations,
+            direct: directAnnotation,
+          });
+    const effectiveComposerFiles = scratchOverride ? [] : composerFiles;
+    const effectiveTerminalContexts = scratchOverride ? [] : composerTerminalContexts;
+    const effectiveReviewComments = scratchOverride ? [] : composerReviewComments;
+    const effectiveThreadContexts = scratchOverride ? [] : composerThreadContexts;
+    const effectiveEnvironmentContexts = scratchOverride ? [] : composerEnvironmentContexts;
     // A direct "send annotation" writes the draft and sends in the same tick; the reference
     // must be in the text now, not after the next render.
-    const draftPrompt = directAnnotation
-      ? ensureInlineContextReferences(promptAtSend, [
-          previewAnnotationContextReference(directAnnotation.annotation),
-        ])
-      : promptAtSend;
-    const replyTo =
-      useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null;
+    const draftPrompt = scratchOverride
+      ? scratchOverride.prompt
+      : directAnnotation
+        ? ensureInlineContextReferences(promptAtSend, [
+            previewAnnotationContextReference(directAnnotation.annotation),
+          ])
+        : promptAtSend;
+    const replyTo = scratchOverride
+      ? null
+      : (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.replyTo ?? null);
     const promptForSend = withReplyReference(draftPrompt, replyTo);
-    if (warnStrandedThreadContext(promptForSend, composerThreadContexts)) return;
-    if (queuedRunEdit.isEditing) {
+    if (warnStrandedThreadContext(promptForSend, effectiveThreadContexts)) return;
+    if (queuedRunEdit.isEditing && !scratchOverride) {
       // A queued message stays in its thread, so saving `/side` would send it to main.
       if (!directAnnotation && parseSideChatCommand(promptAtSend)) {
         toastManager.add(
@@ -847,12 +872,12 @@ export function useComposerSend(input: ComposerSendInput) {
         {
           prompt: promptForSend,
           images: composerImages,
-          files: composerFiles,
-          terminalContexts: composerTerminalContexts,
-          reviewComments: composerReviewComments,
+          files: effectiveComposerFiles,
+          terminalContexts: effectiveTerminalContexts,
+          reviewComments: effectiveReviewComments,
           previewAnnotations: composerPreviewAnnotations,
-          threadContexts: composerThreadContexts,
-          environmentContexts: composerEnvironmentContexts,
+          threadContexts: effectiveThreadContexts,
+          environmentContexts: effectiveEnvironmentContexts,
           replyTo,
         },
         setThreadError,
@@ -867,15 +892,17 @@ export function useComposerSend(input: ComposerSendInput) {
       hasSendableContent,
     } = deriveComposerSendState({
       prompt: promptForSend,
-      imageCount: composerImages.length + composerFiles.length,
-      terminalContexts: composerTerminalContexts,
+      imageCount:
+        composerImages.length + effectiveComposerFiles.length + scratchServerAttachments.length,
+      terminalContexts: effectiveTerminalContexts,
       elementContextCount:
         composerPreviewAnnotations.length +
-        composerReviewComments.length +
-        composerThreadContexts.length +
-        composerEnvironmentContexts.length,
+        effectiveReviewComments.length +
+        effectiveThreadContexts.length +
+        effectiveEnvironmentContexts.length,
     });
     const feedbackCommand =
+      scratchOverride === undefined &&
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
@@ -938,6 +965,7 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const composerHoldsOnlyText =
+      scratchOverride === undefined &&
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
@@ -987,13 +1015,13 @@ export function useComposerSend(input: ComposerSendInput) {
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
       images: composerImages,
-      files: composerFiles,
-      terminalContexts: composerTerminalContexts,
+      files: effectiveComposerFiles,
+      terminalContexts: effectiveTerminalContexts,
       sendableTerminalContexts: sendableComposerTerminalContexts,
       previewAnnotations: composerPreviewAnnotations,
-      reviewComments: composerReviewComments,
-      threadContexts: composerThreadContexts,
-      environmentContexts: composerEnvironmentContexts,
+      reviewComments: effectiveReviewComments,
+      threadContexts: effectiveThreadContexts,
+      environmentContexts: effectiveEnvironmentContexts,
       replyTo,
     });
     const {
@@ -1096,6 +1124,7 @@ export function useComposerSend(input: ComposerSendInput) {
       .getState()
       .getComposerDraft(composerDraftTarget);
     const draftChangedDuringPreparation = () => {
+      if (scratchOverride !== undefined) return false;
       if (isCurrentRouteThread() && composerRef.current?.hasPendingAttachments() === true)
         return true;
       const draft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
@@ -1353,7 +1382,9 @@ export function useComposerSend(input: ComposerSendInput) {
       attachments: composerAttachmentsSnapshot,
       usesAttachmentUploads: turnUsesAttachmentUploads,
       draftTarget: composerDraftTarget,
-    });
+    }).then((prepared) =>
+      scratchServerAttachments.length === 0 ? prepared : [...scratchServerAttachments, ...prepared],
+    );
     if (multipleModelSelections !== null) {
       await sendToMultipleModels({
         threadId: threadIdForSend,
@@ -1364,15 +1395,21 @@ export function useComposerSend(input: ComposerSendInput) {
         sendSnapshot,
         createdAt: messageCreatedAt,
         attachmentsPromise: turnAttachmentsPromise,
+        extraTitleAttachments: scratchServerAttachments,
         usesAttachmentUploads: turnUsesAttachmentUploads,
         readFileBlockReason: () => readLiveAttachmentCapabilities().fileBlockReason,
         buildOutgoingMessageContext,
         isCurrentSend: () => composerSendGenerationRef.current === sendGeneration,
         draftChangedDuringPreparation,
+        preserveComposerDraft: scratchOverride !== undefined,
+        onAccepted: scratchOverride?.onAccepted,
       });
       return;
     }
-    const optimisticAttachments = optimisticMessageAttachments(composerAttachmentsSnapshot);
+    const optimisticAttachments = [
+      ...scratchServerAttachments,
+      ...optimisticMessageAttachments(composerAttachmentsSnapshot),
+    ];
     if (!shouldQueueBehindActiveRun) {
       anchorNewTurn(
         scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
@@ -1422,17 +1459,19 @@ export function useComposerSend(input: ComposerSendInput) {
       : null;
     // Keep new-thread flows from reusing this draft while attachments and worktree setup settle.
     if (sentDraftThreadRef) markPromotedDraftThreadByRef(sentDraftThreadRef);
-    clearComposerDraftContent(composerDraftTarget);
-    // The prompt ref and cursor belong to the thread on screen, which may no longer be this one.
-    if (currentRouteThreadKeyRef.current === routeThreadKey) {
-      promptRef.current = "";
-      composerRef.current?.resetCursorState();
+    if (scratchOverride === undefined) {
+      clearComposerDraftContent(composerDraftTarget);
+      // The prompt ref and cursor belong to the thread on screen, which may no longer be this one.
+      if (currentRouteThreadKeyRef.current === routeThreadKey) {
+        promptRef.current = "";
+        composerRef.current?.resetCursorState();
+      }
     }
 
     const title = deriveThreadTitleSeed(
       {
         text: messageTextForSend,
-        attachments: composerAttachmentsSnapshot,
+        attachments: [...scratchServerAttachments, ...composerAttachmentsSnapshot],
         fallbackLabels: sendTitleFallbackLabels(sendSnapshot),
       },
       m,
@@ -1592,6 +1631,11 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (scratchOverride !== undefined && sentDraftThreadRef !== null) {
+          // Clear parked quick-composer content before draft promotion finalizes so it never leaks into the new thread.
+          clearComposerDraftContent(composerDraftTarget);
+        }
+        scratchOverride?.onAccepted?.();
         if (checkoutPullRequestUrl) {
           linkCheckoutPullRequest(
             scopeThreadRef(environmentId, threadIdForSend),
@@ -1659,6 +1703,7 @@ export function useComposerSend(input: ComposerSendInput) {
       // A restored draft clones its images, so the sent copies are no longer used.
       optimisticBlobPreviews.release(optimisticMessage);
       if (
+        scratchOverride === undefined &&
         composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
@@ -1697,7 +1742,7 @@ export function useComposerSend(input: ComposerSendInput) {
               : {}),
           }),
         );
-      } else {
+      } else if (scratchOverride === undefined) {
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = sendSnapshot.draftText;

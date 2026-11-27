@@ -5,6 +5,9 @@ import {
   ATTACHMENT_UPLOAD_URL_TTL_MS,
   type AttachmentCreateUploadUrlInput,
   AttachmentUploadSigningKeyError,
+  isProviderSendTurnSupportedImageMimeType,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  ScratchValidationError,
 } from "@t3tools/contracts";
 import { isSvgAttachment } from "@t3tools/shared/image";
 import * as Clock from "effect/Clock";
@@ -64,6 +67,39 @@ function decodeClaims(encodedPayload: string): AttachmentUploadClaims | null {
   }
 }
 
+const signUploadUrl = Effect.fn("AttachmentUpload.signClaims")(function* (input: {
+  readonly type: "image" | "file";
+  readonly attachmentId: string;
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+}) {
+  const nowMs = yield* Clock.currentTimeMillis;
+  const expiresAt = nowMs + ATTACHMENT_UPLOAD_URL_TTL_MS;
+  const encodedPayload = base64UrlEncode(
+    encodeAttachmentUploadClaims({
+      version: 1,
+      kind: "attachment-upload",
+      type: input.type,
+      attachmentId: input.attachmentId,
+      name: input.name,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      expiresAt,
+    }),
+  );
+
+  const signer = yield* AssetSigner.AssetSigner;
+  const signature = yield* signer
+    .sign(encodedPayload)
+    .pipe(Effect.mapError((cause) => new AttachmentUploadSigningKeyError({ cause })));
+  return {
+    attachmentId: input.attachmentId,
+    relativeUrl: `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/${encodedPayload}.${signature}`,
+    expiresAt,
+  };
+});
+
 export const issueAttachmentUploadUrl = Effect.fn("AttachmentUpload.issueUrl")(function* (
   input: AttachmentCreateUploadUrlInput,
 ) {
@@ -92,30 +128,43 @@ export const issueAttachmentUploadUrl = Effect.fn("AttachmentUpload.issueUrl")(f
   const attachmentId = createPendingAttachmentId(
     attachmentType === "file" ? attachmentFileExtension(name) : undefined,
   );
-  const expiresAt = nowMs + ATTACHMENT_UPLOAD_URL_TTL_MS;
-  const encodedPayload = base64UrlEncode(
-    encodeAttachmentUploadClaims({
-      version: 1,
-      kind: "attachment-upload",
-      type: attachmentType,
-      attachmentId,
-      name,
-      mimeType: input.mimeType,
-      sizeBytes: input.sizeBytes,
-      expiresAt,
-    }),
-  );
-
-  const signer = yield* AssetSigner.AssetSigner;
-  const signature = yield* signer
-    .sign(encodedPayload)
-    .pipe(Effect.mapError((cause) => new AttachmentUploadSigningKeyError({ cause })));
-  return {
+  return yield* signUploadUrl({
+    type: attachmentType,
     attachmentId,
-    relativeUrl: `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/${encodedPayload}.${signature}`,
-    expiresAt,
-  };
+    name,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+  });
 });
+
+/** Scratch images share the attachment upload route, so both kinds of ids store the same way. */
+export const issueScratchImageUploadUrl = Effect.fn("AttachmentUpload.issueScratchImageUrl")(
+  function* (input: {
+    readonly attachmentId: string;
+    readonly name: string;
+    readonly mimeType: string;
+    readonly sizeBytes: number;
+  }) {
+    const mimeType = input.mimeType.toLowerCase();
+    if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
+      return yield* new ScratchValidationError({
+        message: "Scratch images must be PNG, JPEG, GIF, or WebP.",
+      });
+    }
+    if (input.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+      return yield* new ScratchValidationError({
+        message: "Scratch images must be 10 MB or smaller.",
+      });
+    }
+    return yield* signUploadUrl({
+      type: "image",
+      attachmentId: input.attachmentId,
+      name: input.name,
+      mimeType,
+      sizeBytes: input.sizeBytes,
+    });
+  },
+);
 
 export const validateAttachmentUploadToken = Effect.fn("AttachmentUpload.validateToken")(function* (
   token: string,

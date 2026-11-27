@@ -64,12 +64,22 @@ const ROUTE_CHECK_TIMEOUT_MS = 2_500;
 // that misses it connects over relay, then upgrades with a second reconnect.
 const ROUTE_CHECK_HEAD_START_MS = 500;
 
+export interface ConnectionDriverConnectOptions {
+  /**
+   * When set and the first usable route has this route ID, try it directly without
+   * pre-checking routes or waiting out the head start. Used when replacing a silent
+   * socket whose host just answered a fresh check on that route.
+   */
+  readonly skipRouteCheckForId?: string;
+}
+
 export class ConnectionDriver extends Context.Service<
   ConnectionDriver,
   {
     readonly connect: (
       entry: ConnectionCatalogEntry,
       reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
+      options?: ConnectionDriverConnectOptions,
     ) => Effect.Effect<EnvironmentConnectionLease, ConnectionAttemptError, Scope.Scope>;
     readonly preflight: (
       entry: ConnectionCatalogEntry,
@@ -86,13 +96,9 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   connectRoute: (
     route: ConnectionRoute,
   ) => Effect.Effect<RouteConnection, ConnectionAttemptError, R | Scope.Scope>,
+  options?: ConnectionDriverConnectOptions,
 ) {
-  const routes = usableRoutes(entry);
-  const checks =
-    routes.length === 1
-      ? []
-      : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
-  const headStart = yield* Effect.forkChild(Effect.sleep(ROUTE_CHECK_HEAD_START_MS));
+  const allRoutes = usableRoutes(entry);
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionAttemptError | undefined;
   let blocked: ConnectionAttemptError | undefined;
@@ -113,6 +119,24 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     }
     return result;
   });
+  let routes = allRoutes;
+  if (
+    options?.skipRouteCheckForId !== undefined &&
+    allRoutes.length > 0 &&
+    connectionRouteId(allRoutes[0]!.target) === options.skipRouteCheckForId
+  ) {
+    const first = allRoutes[0]!;
+    const result = yield* attempt(first);
+    if (result._tag === "Success") return { ...result.success, refusedRouteIds };
+    if (result.failure.reason === "unsupported") return yield* result.failure;
+    routes = allRoutes.slice(1);
+  }
+  const checks =
+    allRoutes.length <= 1
+      ? []
+      : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
+  const headStart =
+    checks.length === 0 ? null : yield* Effect.forkChild(Effect.sleep(ROUTE_CHECK_HEAD_START_MS));
   const silent: Array<{ readonly route: ConnectionRoute; readonly index: number }> = [];
   for (const [index, route] of routes.entries()) {
     const check =
@@ -120,7 +144,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
         ? "unchecked"
         : yield* Effect.raceFirst(
             Fiber.join(checks[index]!),
-            Fiber.join(headStart).pipe(Effect.as<RouteCheck>("silent")),
+            Fiber.join(headStart!).pipe(Effect.as<RouteCheck>("silent")),
           );
     if (check === "silent") {
       silent.push({ route, index });
@@ -230,6 +254,7 @@ export const make = Effect.gen(function* () {
   const connect = Effect.fn("ConnectionDriver.connect")(function* (
     entry: ConnectionCatalogEntry,
     reportProgress: (progress: ConnectionDriverProgress) => Effect.Effect<void>,
+    options?: ConnectionDriverConnectOptions,
   ) {
     const target = entry.target;
     yield* Effect.annotateCurrentSpan({
@@ -267,6 +292,7 @@ export const make = Effect.gen(function* () {
         }
         return { prepared, session } satisfies RouteConnection;
       }),
+      options,
     );
   });
 

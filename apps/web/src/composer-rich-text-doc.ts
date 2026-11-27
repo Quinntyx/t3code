@@ -26,6 +26,7 @@ import {
   markInputRule,
   markPasteRule,
   mergeAttributes,
+  Node,
 } from "@tiptap/core";
 import { isHistoryTransaction } from "@tiptap/pm/history";
 import { canJoin, findWrapping } from "@tiptap/pm/transform";
@@ -54,6 +55,7 @@ import {
 import { collectInlineContextIds } from "~/lib/composerContextReferences";
 import { composerMathRanges } from "@t3tools/shared/composerInlineTokens";
 import { markdownMathRanges } from "~/markdown/wordsHast";
+import { formatScratchImageMarkdown, parseScratchImageLine } from "@t3tools/shared/scratchDocument";
 
 export type SkillMeta = { label: string; description: string | null };
 
@@ -581,6 +583,27 @@ export const ComposerBlockExtensions = [
   ComposerHeadingExtension,
 ];
 
+export const ComposerScratchImageExtension = Node.create({
+  name: "scratchImage",
+  group: "block",
+  atom: true,
+  selectable: true,
+  isolating: true,
+  addAttributes() {
+    return {
+      attachmentId: { default: "" },
+      alt: { default: "" },
+      previewUrl: { default: null },
+    };
+  },
+  parseHTML() {
+    return [{ tag: "div[data-scratch-image]" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["div", mergeAttributes(HTMLAttributes, { "data-scratch-image": "" })];
+  },
+});
+
 function randomNodeKey(): string {
   return `tiptap-${Math.random().toString(36).slice(2)}`;
 }
@@ -916,6 +939,7 @@ export function buildTiptapContent(
     literalText?: boolean;
     literalLength?: number;
     isKnownModel?: IsKnownModel;
+    enableScratchImages?: boolean;
   },
 ): Record<string, unknown>[] {
   const chips = { skill: skillLabelFor, model: options?.isKnownModel ?? NO_MODELS };
@@ -989,6 +1013,7 @@ export function buildTiptapContent(
   const entries: (
     | { code: Record<string, unknown> }
     | { rule: string }
+    | { image: { attachmentId: string; alt: string } }
     | { heading: { level: number; space: string; inline: InlineJson[] } }
     | { quote: { prefix: string; inline: InlineJson[] } }
     | { line: DocLine }
@@ -1010,6 +1035,13 @@ export function buildTiptapContent(
     }
     const opening = blockSyntax ? parseOpeningFence(line) : null;
     if (!opening) {
+      if (options?.enableScratchImages) {
+        const image = parseScratchImageLine(line);
+        if (image !== null) {
+          entries.push({ image });
+          continue;
+        }
+      }
       if (blockSyntax && /^([-*_])(?:[ \t]*\1){2,}[ \t]*\r?$/.test(line)) {
         entries.push({ rule: line });
         continue;
@@ -1116,6 +1148,11 @@ export function buildTiptapContent(
       blocks.push({ type: "horizontalRule", attrs: { source: entry.rule } });
       continue;
     }
+    if ("image" in entry) {
+      flushLists();
+      blocks.push({ type: "scratchImage", attrs: entry.image });
+      continue;
+    }
     if ("heading" in entry) {
       flushLists();
       blocks.push({
@@ -1174,7 +1211,12 @@ export function buildTiptapContent(
 export function buildDocJson(
   value: string,
   skillLabelFor: (name: string) => SkillMeta | null,
-  options?: { styling?: boolean; literalText?: boolean; isKnownModel?: IsKnownModel },
+  options?: {
+    styling?: boolean;
+    literalText?: boolean;
+    isKnownModel?: IsKnownModel;
+    enableScratchImages?: boolean;
+  },
 ) {
   const content = buildTiptapContent(value, skillLabelFor, options);
   if (content.at(-1)?.type === "horizontalRule") content.push({ type: "paragraph" });
@@ -1736,10 +1778,18 @@ function serializeDoc(doc: ProseMirrorNode): RichDocMap {
   });
 
   let pmBlockStart = 0;
+  let emittedBlockCount = 0;
   blocks.forEach((block, blockIndex) => {
-    if (blockIndex > 0 && !isTrailingLineAfterRule(doc, blockIndex)) pushBreakRun(acc);
-    if (blockIndex > 0 && needsBlankLineBetween(blocks, blockIndex)) {
-      pushBlankLineRun(acc, pmBlockStart + 1);
+    const isPendingScratchImage =
+      block.type.name === "scratchImage" &&
+      typeof (block.attrs as Record<string, unknown>).attachmentId === "string" &&
+      ((block.attrs as Record<string, unknown>).attachmentId as string).length === 0;
+    if (!isPendingScratchImage) {
+      if (emittedBlockCount > 0 && !isTrailingLineAfterRule(doc, blockIndex)) pushBreakRun(acc);
+      if (emittedBlockCount > 0 && needsBlankLineBetween(blocks, blockIndex)) {
+        pushBlankLineRun(acc, pmBlockStart + 1);
+      }
+      emittedBlockCount += 1;
     }
     if (LIST_NODE_NAMES.has(block.type.name)) {
       walkList(block, pmBlockStart, acc);
@@ -1779,6 +1829,30 @@ function serializeDoc(doc: ProseMirrorNode): RichDocMap {
       });
       acc.value += source;
       acc.md += source.length;
+    } else if (block.type.name === "scratchImage") {
+      const attrs = block.attrs as Record<string, unknown>;
+      const attachmentId = typeof attrs.attachmentId === "string" ? attrs.attachmentId : "";
+      const source =
+        attachmentId.length === 0
+          ? ""
+          : formatScratchImageMarkdown(
+              attachmentId,
+              typeof attrs.alt === "string" ? attrs.alt : "",
+            );
+      acc.runs.push({
+        kind: "token",
+        flatStart: acc.flat,
+        docLen: 1,
+        mdLen: source.length,
+        openLen: 0,
+        closeLen: 0,
+        pmPos: pmBlockStart,
+        mdStart: acc.md,
+        nodeName: "scratchImage",
+      });
+      acc.value += source;
+      acc.md += source.length;
+      acc.flat += 1;
     } else if (block.type.name === "paragraph") {
       appendInlineRuns(block, pmBlockStart + 1, acc);
     }

@@ -2678,6 +2678,63 @@ describe("composerDraftStore inline context references", () => {
     expect(draft?.reviewComments).toEqual([reviewComment]);
     expect(draft?.previewAnnotations).toEqual([annotation]);
   });
+
+  it("preserves attached files and their inline links when preserveFiles is set", () => {
+    const store = useComposerDraftStore.getState();
+    const attachedFile = {
+      type: "file" as const,
+      id: "file-keep-1",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+      file: new File(["hello world!"], "notes.txt", { type: "text/plain" }),
+    };
+    store.addFiles(threadRef, [attachedFile]);
+    store.setPrompt(threadRef, `Check [notes.txt](t3-context://v1/file/file_file-keep-1) please`);
+    store.clearComposerPromptAndImages(threadRef, { preserveFiles: true });
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.files).toHaveLength(1);
+    expect(draft?.files[0]?.id).toBe("file-keep-1");
+    expect(draft?.prompt).toContain("[notes.txt](t3-context://v1/file/file_file-keep-1)");
+    expect(draft?.prompt).not.toContain("please");
+  });
+
+  it("preserves images and prompt edits added after staging snapshot when clearing staged items", () => {
+    const store = useComposerDraftStore.getState();
+    const imgA = {
+      type: "image" as const,
+      id: "img-staged",
+      name: "a.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+      file: new File(["1234"], "a.png", { type: "image/png" }),
+      previewUrl: "blob:staged",
+    };
+    const imgB = {
+      type: "image" as const,
+      id: "img-new",
+      name: "b.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+      file: new File(["5678"], "b.png", { type: "image/png" }),
+      previewUrl: "blob:new",
+    };
+    store.addImages(threadRef, [imgA, imgB]);
+    store.setPrompt(
+      threadRef,
+      "![a.png](t3-context://v1/image/image_img-staged) ![b.png](t3-context://v1/image/image_img-new) new text typed mid-upload",
+    );
+    store.clearComposerPromptAndImages(threadRef, {
+      preserveFiles: true,
+      onlyImageIds: new Set(["img-staged"]),
+      expectedStrippedPrompt: "original text",
+    });
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.images.map((i) => i.id)).toEqual(["img-new"]);
+    expect(draft?.prompt).toContain("new text typed mid-upload");
+    expect(draft?.prompt).toContain("image_img-new");
+    expect(draft?.prompt).not.toContain("image_img-staged");
+  });
 });
 
 describe("composerDraftStore attachment references", () => {

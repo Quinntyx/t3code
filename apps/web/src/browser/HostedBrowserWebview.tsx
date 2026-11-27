@@ -12,6 +12,7 @@ import {
   takeThumbButtonNavigation,
 } from "~/components/preview/thumbButtons";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
+import { usePreviewSession } from "~/components/preview/usePreviewSession";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
 
@@ -105,6 +106,8 @@ export function HostedBrowserWebview(props: {
     (state) => (state.activityByTabId[runtimeTabId] ?? 0) > 0,
   );
   const recordingActive = useActiveBrowserRecordingTabIds().has(runtimeTabId);
+  // Keep preview events subscribed for linked/non-primary environments while this webview is hosted.
+  usePreviewSession(threadRef);
   usePreviewBridge({ threadRef, tabId, runtimeTabId, serverDriven });
 
   const serverColorScheme = serverRendering?.colorScheme;

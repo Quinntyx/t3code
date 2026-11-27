@@ -1933,6 +1933,16 @@ export const OrchestrationV2EmailDraft = Schema.Struct({
 });
 export type OrchestrationV2EmailDraft = typeof OrchestrationV2EmailDraft.Type;
 
+export const OrchestrationV2EmailEditedField = Schema.Literals([
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "subject",
+  "body",
+]);
+export type OrchestrationV2EmailEditedField = typeof OrchestrationV2EmailEditedField.Type;
+
 /**
  * An agent drafted an email for the user to review. Once sent, `draft` is what
  * the user actually sent.
@@ -1942,6 +1952,7 @@ const OrchestrationV2EmailRequestFields = {
   accounts: Schema.Array(OrchestrationV2EmailAccount),
   draft: OrchestrationV2EmailDraft,
   emailStatus: OrchestrationV2EmailRequestStatus,
+  edited: Schema.optional(Schema.Array(OrchestrationV2EmailEditedField)),
 } as const;
 
 export const OrchestrationV2LinkRequestStatus = Schema.Literals([
@@ -4240,6 +4251,15 @@ const OrchestrationV2InternalCommand = Schema.Union([
     accounts: Schema.Array(OrchestrationV2EmailAccount),
     draft: OrchestrationV2EmailDraft,
     emailStatus: OrchestrationV2EmailRequestStatus,
+    edited: Schema.optional(Schema.Array(OrchestrationV2EmailEditedField)),
+    /** Tells the agent how the card ended, in the same commit that closes it. */
+    wake: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        notification: OrchestrationV2Notification,
+      }),
+    ),
   }),
   /** Internal so no client can mark a report sent without it being stored and sent. */
   Schema.Struct({

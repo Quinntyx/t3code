@@ -243,7 +243,9 @@ export interface ThreadDetailScreenProps {
       viewportHeight: number,
     ) => React.ReactNode;
     readonly controls: (viewportHeight: number) => React.ReactNode;
+    readonly armedComposerBar?: React.ReactNode;
     readonly editorRef: React.RefObject<ComposerEditorHandle | null>;
+    readonly onEditorFocusChange?: ((focused: boolean) => void) | undefined;
     readonly sendBlockedReason: string | null;
     readonly interactionLocked: boolean;
   };
@@ -1954,6 +1956,7 @@ function ThreadDetailBody(
                     <>
                       <ThreadComposer
                         isDraft={Boolean(props.draftMode)}
+                        armedComposerBar={props.draftMode?.armedComposerBar}
                         canOperateThread={props.canOperateThread}
                         reportedModelSelection={reportedModelSelection}
                         editorRef={composerEditorRef}
@@ -2037,7 +2040,10 @@ function ThreadDetailBody(
                         onShowUsageLimits={showUsageLimits}
                         canSwitchProvider={props.canSwitchThreadProvider}
                         onHeightChange={handleComposerHeightChange}
-                        onEditorFocusChange={handleOwnedInputFocusChange}
+                        onEditorFocusChange={(focused) => {
+                          handleOwnedInputFocusChange(focused);
+                          props.draftMode?.onEditorFocusChange?.(focused);
+                        }}
                       />
                     </>
                   )}

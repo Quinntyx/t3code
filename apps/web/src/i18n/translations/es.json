@@ -1936,6 +1936,8 @@
   "98f445984c075971": "Los chats laterales empiezan después del primer mensaje.",
   "e9cf5c708ad52a85": "Disponible cuando el worktree del hilo esté configurado.",
   "6b1c0d7732da6648": "No se pudo compactar el contexto.",
+  "324d80c56dcc6b7e": "No se pudo añadir la imagen",
+  "b495aaebe5455e65": "No se pudieron copiar las imágenes del borrador a la máquina de destino",
   "bbbce20ad5d6790d": "{count, plural, one {{count} en cola} other {{count} en cola}}",
   "2d3ad1215c5d8a52": "Esta conexión no puede cambiar hilos.",
   "6b6182011ef50565": "Moviendo el hilo a otra máquina",
@@ -1944,6 +1946,7 @@
   "0e974f4d7d582b12": "Enviando comentarios",
   "abb59f572874d3b4": "Cargando mensajes",
   "9c353040cc3010c4": "Preparando el worktree",
+  "284e925bc681a50a": "Selección",
   "536ad0c3529ef1b3": "La API del portapapeles no está disponible al copiar el comando.",
   "7e06782c1ee65b02": "No se pudo copiar el comando al portapapeles.",
   "61bc68e834fb83af": "Copiar comando",
@@ -3629,6 +3632,7 @@
   "5c0eb4217bb673bd": "Usando el plan de ChatGPT",
   "3e545d70d0c3535c": "Ruta de navegación del hilo",
   "890c34762a621a66": "Abrir el hilo principal: {title}",
+  "0bc152a492a12716": "Borrador",
   "7514746d2bd43a1c": "Título del hilo",
   "ab42a6d2ab6073d9": "Acciones del hilo {title}",
   "cd8fd5a47060164b": [
@@ -6573,26 +6577,6 @@
   ],
   "216ab7514aea1d61": "Empezar sin agente",
   "501ce2d99da8bfd1": "Configura un agente para empezar.",
-  "71f3822326109c8e": [
-    "T3 Code recopila datos de uso anónimos para mejorar la app. Para desactivarlo, consulta la",
-    " ",
-    {
-      "t": "a",
-      "i": 1,
-      "c": "política de privacidad"
-    },
-    "."
-  ],
-  "b33f35083757b42c": [
-    "Consulta la",
-    " ",
-    {
-      "t": "a",
-      "i": 1,
-      "c": "política de privacidad"
-    },
-    "."
-  ],
   "f77d000c0710f066": "Activar",
   "4ed27bf946e504db": "Configurar",
   "7a26eaacff0607f7": [
@@ -7723,6 +7707,14 @@
   "14a07a8f2b0df4dc": "{closed, plural, one {Se cerró {closed} pull request} other {Se cerraron {closed} pull requests}}",
   "48e3a799c1225e8d": "No se puede actualizar la pull request del hilo",
   "6c56f46a160d2662": "¿Fusionar {term, select, mr {merge request} cr {solicitud de cambios} other {pull request}} #{number}?",
+  "cb2a143384b61830": "Desplazarse a la selección",
+  "5add91224b8ed4d0": "Enviar con Intro",
+  "54ee382ef64e1327": "Soltar selección",
+  "6702ab96d7c18bc8": "Ampliar imagen",
+  "ec9388fc860a64f6": "Quitar imagen",
+  "1e40114e03b7e42a": "Documento de borrador",
+  "256f9024d282c896": "No se pudo guardar la página de borrador.",
+  "ac176c47f6a4aa46": "No se pudo actualizar la página de borrador.",
   "7e8a1a9a7355ac10": "Buscar en el contenido del proyecto…",
   "acd933aed79835b4": "Buscar en el contenido de los archivos de {project}",
   "99ab4b9c352f4896": "Coincidir mayúsculas y minúsculas",
@@ -9249,6 +9241,7 @@
   "37f2a47d12cdfdf8": "Cuadro de mensaje: acción contraria a poner en cola o redirigir",
   "d9d54dde0ba27d96": "Cuadro de mensaje: iniciar en segundo plano",
   "ad9c298de0bfbc1b": "Cuadro de mensaje: enviar e iniciar un hilo nuevo",
+  "15d88c8c8ae85732": "Borrador: Cambiar foco o fijar selección",
   "5e97cb4f703ff372": "Cuadro de mensaje: iniciar o terminar dictado",
   "e49ba42e8e8596d2": "Cola: enviar el primer mensaje en cola",
   "7f67d035b1db66f5": "Cola: editar el último mensaje en cola",

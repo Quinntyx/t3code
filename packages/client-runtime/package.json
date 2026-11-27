@@ -750,6 +750,10 @@
     "./pull-request-references": {
       "types": "./src/pullRequestReferences.ts",
       "default": "./src/pullRequestReferences.ts"
+    },
+    "./state/scratch-key": {
+      "types": "./src/state/scratchKey.ts",
+      "default": "./src/state/scratchKey.ts"
     }
   },
   "scripts": {

@@ -838,3 +838,17 @@ it.effect("requires provider management to send /logout through chat", () =>
     ]);
   }).pipe(Effect.scoped),
 );
+
+it("requires read scope for scratch queries and operate scope for scratch writes", () => {
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchGet]).toBe(AuthOrchestrationReadScope);
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchSubscribe]).toBe(AuthOrchestrationReadScope);
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchSubscribeSummaries]).toBe(
+    AuthOrchestrationReadScope,
+  );
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchSave]).toBe(AuthOrchestrationOperateScope);
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchSetCursor]).toBe(AuthOrchestrationOperateScope);
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchConsumeChunk]).toBe(AuthOrchestrationOperateScope);
+  expect(RPC_REQUIRED_SCOPES[WS_METHODS.scratchCreateImageUploadUrl]).toBe(
+    AuthOrchestrationOperateScope,
+  );
+});

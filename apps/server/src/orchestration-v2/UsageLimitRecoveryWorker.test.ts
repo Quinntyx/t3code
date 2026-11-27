@@ -3,6 +3,7 @@ import {
   CommandId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ServerCommand,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   type ServerProvider,
@@ -14,6 +15,7 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -284,22 +286,29 @@ const changes = (
   previous: ServerProviderUsageLimits | undefined,
   next: ServerProviderUsageLimits,
 ) => {
-  const { observed, spent } = report(
+  const { observedWindows, spentWindows } = report(
     previous === undefined ? new Map() : new Map([[instanceId, previous]]),
     next,
   );
-  return { observed, spent };
+  return {
+    observed: observedWindows.get(instanceId) ?? [],
+    spent: spentWindows.get(instanceId) ?? [],
+  };
 };
 
-it("observes an instance whose allowance came back", () => {
+it("observes windows whose allowance came back", () => {
   assert.deepEqual(changes(limits([window("primary", 100)]), limits([window("primary", 0)])), {
-    observed: [instanceId],
+    observed: ["primary"],
     spent: [],
   });
-  // A probe that never reached 100% still gives the allowance back.
+  // A probe that never reached 100% still observes a reset to zero or a large drop near exhaustion.
   assert.deepEqual(
     changes(limits([window("primary", 99)]), limits([window("primary", 0)])).observed,
-    [instanceId],
+    ["primary"],
+  );
+  assert.deepEqual(
+    changes(limits([window("primary", 95)]), limits([window("primary", 50)])).observed,
+    ["primary"],
   );
   // A window that rolled over to a later reset clock came back even at the same spend.
   assert.deepEqual(
@@ -307,31 +316,41 @@ it("observes an instance whose allowance came back", () => {
       limits([window("primary", 40)]),
       limits([window("primary", 40, "2026-07-01T05:00:00.000Z")]),
     ).observed,
-    [instanceId],
+    ["primary"],
   );
 });
 
-it("holds an instance whose allowance is still spent", () => {
-  // One window resetting does not free a model the other window still blocks.
+it("tracks spent and recovered windows independently", () => {
+  // One window resetting while another stays spent reports both windows accurately.
   assert.deepEqual(
     changes(
       limits([window("primary", 100), window("weekly", 100)]),
       limits([window("primary", 0), window("weekly", 100)]),
     ),
-    { observed: [], spent: [instanceId] },
+    { observed: ["primary"], spent: ["weekly"] },
   );
-  // A probe that stops reporting a spent window has not shown that it came back.
+  // A probe that stops reporting a spent window carries it forward as still spent.
   assert.deepEqual(
     changes(limits([window("primary", 100), window("weekly", 40)]), limits([window("weekly", 39)])),
-    { observed: [], spent: [instanceId] },
+    { observed: [], spent: ["primary"] },
   );
+  // A window whose modelIds/providerIds scope changed is a fresh baseline, not a reset, and
+  // invalidates any prior reset marker for that window id.
+  const scopeChanged = report(
+    new Map([
+      [instanceId, limits([{ ...window("budget_1", 100), modelIds: ["opencode/model-a"] }])],
+    ]),
+    limits([{ ...window("budget_1", 0), modelIds: ["opencode/model-b"] }]),
+  );
+  assert.deepEqual(scopeChanged.observedWindows.get(instanceId) ?? [], []);
+  assert.deepEqual(scopeChanged.invalidatedWindows.get(instanceId) ?? [], ["budget_1"]);
 });
 
 it("remembers a spent window a probe stopped reporting", () => {
   const first = report(new Map(), limits([window("primary", 100), window("weekly", 40)]));
-  assert.deepEqual(first.spent, [instanceId]);
+  assert.deepEqual(first.spentWindows.get(instanceId), ["primary"]);
   const partial = report(first.limits, limits([window("weekly", 39)]));
-  assert.deepEqual(partial.observed, []);
+  assert.isUndefined(partial.observedWindows.get(instanceId));
   assert.deepEqual(
     partial.limits
       .get(instanceId)
@@ -341,16 +360,18 @@ it("remembers a spent window a probe stopped reporting", () => {
   );
   // The window comes back reported and unspent, so the allowance really did return.
   const recovered = report(partial.limits, limits([window("primary", 0), window("weekly", 39)]));
-  assert.deepEqual(recovered.observed, [instanceId]);
+  assert.deepEqual(recovered.observedWindows.get(instanceId), ["primary"]);
+  assert.isUndefined(recovered.spentWindows.get(instanceId));
 });
 
 it("does not keep a spent window that has no reset clock", () => {
   const first = report(new Map(), limits([window("five_hour", 100), budget("monthly_spend", 100)]));
-  assert.deepEqual(first.spent, [instanceId]);
+  assert.deepEqual(first.spentWindows.get(instanceId), ["five_hour", "monthly_spend"]);
   // The budget stops being reported and never had a clock, so it cannot hold the instance spent
   // forever; the session window coming back is the allowance returning.
   const recovered = report(first.limits, limits([window("five_hour", 0)]));
-  assert.deepEqual(recovered.observed, [instanceId]);
+  assert.deepEqual(recovered.observedWindows.get(instanceId), ["five_hour"]);
+  assert.isUndefined(recovered.spentWindows.get(instanceId));
   assert.deepEqual(
     recovered.limits.get(instanceId)?.windows.map((entry) => entry.id),
     ["five_hour"],
@@ -362,12 +383,20 @@ it("ignores the rounding gap between a probe and streamed usage", () => {
     changes(limits([window("primary", 58)]), limits([window("primary", 57.99999999999999)])),
     { observed: [], spent: [] },
   );
+  assert.deepEqual(changes(limits([window("primary", 100)]), limits([window("primary", 99.49)])), {
+    observed: [],
+    spent: [],
+  });
+  assert.deepEqual(
+    changes(limits([window("primary", 95.51)]), limits([window("primary", 95.49)])),
+    { observed: [], spent: [] },
+  );
 });
 
 it("ignores reports that do not move the allowance", () => {
   assert.deepEqual(changes(limits([window("primary", 100)]), limits([window("primary", 100)])), {
     observed: [],
-    spent: [instanceId],
+    spent: ["primary"],
   });
   // The first report only establishes a baseline.
   assert.deepEqual(changes(undefined, limits([window("primary", 0)])), { observed: [], spent: [] });
@@ -377,7 +406,7 @@ it("ignores reports that do not move the allowance", () => {
       limits([window("primary", 100)]),
       limits([], { unavailable: { reason: "probeFailed" } }),
     ),
-    { observed: [], spent: [instanceId] },
+    { observed: [], spent: ["primary"] },
   );
   // Another login's windows describe a different allowance.
   assert.deepEqual(
@@ -386,6 +415,86 @@ it("ignores reports that do not move the allowance", () => {
       limits([window("primary", 0)], { credentialFingerprint: "second" }),
     ),
     { observed: [], spent: [] },
+  );
+  // Small API clock jitter on resetsAt is not a window rollover, even when duration is omitted on sparse updates.
+  assert.deepEqual(
+    changes(
+      limits([
+        { ...window("3p-weekly", 80, "2026-07-01T00:00:00.000Z"), windowDurationMins: 10080 },
+      ]),
+      limits([window("3p-weekly", 80, "2026-07-01T01:00:00.000Z")]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // An idle 0% rolling window moving its reset clock forward is wall-clock drift, not a reset.
+  assert.deepEqual(
+    changes(
+      limits([{ ...window("go_rolling", 0, "2026-07-01T00:00:00.000Z"), windowDurationMins: 300 }]),
+      limits([{ ...window("go_rolling", 0, "2026-07-01T05:00:00.000Z"), windowDurationMins: 300 }]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // Small rolling decay on an unspent window (even at 90-99%) does not mean a blocking limit reset.
+  assert.deepEqual(
+    changes(limits([window("go_rolling", 94)]), limits([window("go_rolling", 93)])),
+    {
+      observed: [],
+      spent: [],
+    },
+  );
+  assert.deepEqual(changes(limits([window("gemini-5h", 1.7)]), limits([window("gemini-5h", 0)])), {
+    observed: [],
+    spent: [],
+  });
+  assert.deepEqual(
+    changes(limits([window("gemini-weekly", 35)]), limits([window("gemini-weekly", 34)])),
+    { observed: [], spent: [] },
+  );
+  assert.deepEqual(
+    changes(limits([window("go_rolling", 30)]), limits([window("go_rolling", 15)])),
+    { observed: [], spent: [] },
+  );
+  // A resetsAt jump while spend is rising does not prove allowance came back.
+  assert.deepEqual(
+    changes(
+      limits([{ ...window("primary", 1, "2026-07-01T00:00:00.000Z"), windowDurationMins: 300 }]),
+      limits([{ ...window("primary", 2, "2026-07-01T05:00:00.000Z"), windowDurationMins: 300 }]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // A monthly window omitting windowDurationMins still uses a monthly rollover threshold.
+  assert.deepEqual(
+    changes(
+      limits([
+        {
+          id: "go_monthly",
+          kind: "monthly",
+          label: "Monthly",
+          usedPercent: 40,
+          resetsAt: "2026-08-01T00:00:00.000Z",
+        },
+      ]),
+      limits([
+        {
+          id: "go_monthly",
+          kind: "monthly",
+          label: "Monthly",
+          usedPercent: 40,
+          resetsAt: "2026-08-01T01:00:00.000Z",
+        },
+      ]),
+    ),
+    { observed: [], spent: [] },
+  );
+  // An unsupported report (logout / API key / no subscription) clears prior limits instead of
+  // retaining them as probeFailed does, so a later login's 0% reading is only a fresh baseline.
+  const afterLogout = report(
+    new Map([[instanceId, limits([window("primary", 100)])]]),
+    limits([], { unavailable: { reason: "unsupported" } }),
+  );
+  assert.isDefined(afterLogout.limits.get(instanceId)?.unavailable);
+  assert.isUndefined(
+    report(afterLogout.limits, limits([window("primary", 0)])).observedWindows.get(instanceId),
   );
 });
 
@@ -398,6 +507,10 @@ const waitingThread = (
   status: "failed",
   lastErrorClass: "usage_limit",
   latestRunId: RunId.make("run:waiting"),
+  latestRunProviderInstanceId: overrides.providerInstanceId ?? ProviderInstanceId.make("codex"),
+  latestRunModel: null,
+  threadModel: null,
+  latestRunUsageLimitContinuationOfRunId: null,
   usageLimitResetAt: resetAt,
   latestRunCompletedAt: DateTime.makeUnsafe("2026-06-30T00:00:00.000Z"),
   updatedAt: DateTime.makeUnsafe("2026-06-30T00:00:00.000Z"),
@@ -597,6 +710,653 @@ it.effect("resumes a waiting thread as soon as the provider reports the limit ba
         command.type === "message.dispatch" ? command.usageLimitContinuationOfRunId : null,
         thread.latestRunId,
       );
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect(
+  "matches observed resets to the failed run's quota pool and stops early-resume loops",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-07-01T00:00:00.000Z"));
+      const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+      const domainEvents = yield* Queue.unbounded<{
+        readonly event: OrchestrationV2DomainEvent;
+        readonly onPull?: Deferred.Deferred<void>;
+      }>();
+      const dispatched = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+      const now = yield* DateTime.now;
+      const futureResetAt = DateTime.formatIso(DateTime.add(now, { hours: 2 }));
+      const piInstanceId = ProviderInstanceId.make("pi_main");
+      const agInstanceId = ProviderInstanceId.make("antigravity_main");
+      const piProxyThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:pi-proxy"),
+        providerInstanceId: piInstanceId,
+        latestRunId: RunId.make("run:pi-proxy:1"),
+        latestRunModel: "cliproxyapi/gpt-6.2-sol",
+        threadModel: "cliproxyapi/gpt-6.2-sol",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:pi-proxy:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:pi-proxy"),
+        },
+      });
+      const piSwitchedThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:pi-switched"),
+        providerInstanceId: piInstanceId,
+        latestRunId: RunId.make("run:pi-switched:1"),
+        latestRunModel: "opencode-go/big-pickle",
+        threadModel: "cliproxyapi/gpt-6.2-sol",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:pi-switched:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:pi-switched"),
+        },
+      });
+      const piGoThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:pi-go"),
+        providerInstanceId: piInstanceId,
+        latestRunId: RunId.make("run:pi-go:1"),
+        latestRunModel: "opencode-go/big-pickle",
+        threadModel: "opencode-go/big-pickle",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:pi-go:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:pi-go"),
+        },
+      });
+      const agGeminiThread = waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:ag-gemini"),
+        providerInstanceId: agInstanceId,
+        latestRunId: RunId.make("run:ag-gemini:1"),
+        latestRunModel: "gemini-4-neon",
+        threadModel: "gemini-4-neon",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: DateTime.subtract(now, { minutes: 5 }),
+        updatedAt: DateTime.subtract(now, { minutes: 5 }),
+        limitRecovery: {
+          runId: RunId.make("run:ag-gemini:1"),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make("recovery:ag-gemini"),
+        },
+      });
+      // Place non-matching threads before piGoThread so any false match dispatches first.
+      const candidatesRef = yield* Ref.make<
+        ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>
+      >([piProxyThread, piSwitchedThread, agGeminiThread, piGoThread]);
+      const layer = UsageLimitRecoveryWorker.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
+              getLimitRecoveryCandidates: (options) =>
+                Ref.get(candidatesRef).pipe(
+                  Effect.map((rows) =>
+                    options.resetObserved === true ||
+                    DateTime.toEpochMillis(options.now) >= Date.parse(futureResetAt)
+                      ? rows
+                      : [],
+                  ),
+                ),
+              getLimitRecoveryWakeAt: () => Effect.succeed(null),
+              hasActivePullRequestThread: () => Effect.succeed(false),
+            }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              dispatch: (command) => Queue.offer(dispatched, command).pipe(Effect.as({} as never)),
+            }),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.fromEffect(
+                Queue.take(domainEvents).pipe(
+                  Effect.tap((entry) =>
+                    entry.onPull === undefined
+                      ? Effect.void
+                      : Deferred.succeed(entry.onPull, undefined),
+                  ),
+                  Effect.map((entry) => entry.event),
+                ),
+              ).pipe(Stream.forever),
+            }),
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                autoResumeLimitedThreads: true,
+                autoResumePullRequestThreadsFirst: false,
+                snoozeLimitedThreads: false,
+              } as never),
+              streamChanges: Stream.never,
+            }),
+            layerProviderRegistry(Stream.fromQueue(providerChanges)),
+            layerResetSources(),
+          ),
+        ),
+      );
+      const snapshot = (input: {
+        readonly goRolling: number;
+        readonly gemini5h: number;
+        readonly thirdPartyWeekly: number;
+      }) =>
+        [
+          {
+            instanceId: piInstanceId,
+            driver: ProviderDriverKind.make("pi"),
+            usageLimits: limits([window("go_rolling", input.goRolling, futureResetAt)], {
+              ownerDriver: ProviderDriverKind.make("opencode"),
+            }),
+          },
+          {
+            instanceId: agInstanceId,
+            driver: ProviderDriverKind.make("antigravity"),
+            usageLimits: limits([
+              window("gemini-5h", input.gemini5h, futureResetAt),
+              window("3p-weekly", input.thirdPartyWeekly, futureResetAt),
+            ]),
+          },
+        ] as unknown as ReadonlyArray<ServerProvider>;
+      yield* Effect.gen(function* () {
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 100, thirdPartyWeekly: 100 }),
+        );
+        // OpenCode Go resets and 3p-weekly resets while gemini-5h stays spent:
+        // only pi-go matches; pi-proxy (cliproxyapi/*), pi-switched (switched to unmonitored model),
+        // and ag-gemini (gemini-*) must stay waiting.
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 100, thirdPartyWeekly: 0 }),
+        );
+        const first = yield* Queue.take(dispatched);
+        assert.equal("threadId" in first ? first.threadId : null, piGoThread.id);
+        assert.equal(yield* Queue.size(dispatched), 0);
+
+        // Now pi-go fails again immediately on run 2 (continuation of run 1) with a revised retry
+        // deadline 30 minutes later: it must still wait for its recorded clock rather than looping.
+        const revisedResetAt = DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe(futureResetAt), { minutes: 30 }),
+        );
+        yield* TestClock.adjust("5 seconds");
+        const failedAgainAt = yield* DateTime.now;
+        const piGoContinuationFailed = {
+          ...piGoThread,
+          latestRunId: RunId.make("run:pi-go:2"),
+          latestRunUsageLimitContinuationOfRunId: piGoThread.latestRunId,
+          usageLimitResetAt: revisedResetAt,
+          latestRunCompletedAt: failedAgainAt,
+          updatedAt: failedAgainAt,
+          limitRecovery: {
+            runId: RunId.make("run:pi-go:2"),
+            resetAt: revisedResetAt,
+            autoResume: true,
+            requestId: CommandId.make("recovery:pi-go:2"),
+          },
+        };
+        yield* Ref.set(candidatesRef, [piProxyThread, piGoContinuationFailed, agGeminiThread]);
+        // Cancelling an unstarted queued message must not clear the early-resume loop guard.
+        const unstartedCancelApplied = yield* Deferred.make<void>();
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "run.updated",
+            threadId: piGoThread.id,
+            payload: { status: "cancelled", startedAt: null },
+          } as unknown as OrchestrationV2DomainEvent,
+        });
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "turn-item.updated",
+            threadId: piGoThread.id,
+            payload: { type: "assistant_message" },
+          } as unknown as OrchestrationV2DomainEvent,
+          onPull: unstartedCancelApplied,
+        });
+        yield* Deferred.await(unstartedCancelApplied);
+        yield* TestClock.adjust("1 second");
+        // Even if go_rolling flaps 100 -> 0 again, pi-go must not early-resume again for the same continuation.
+        // Meanwhile gemini-5h resets 100 -> 0 (while 3p-weekly is back to 100): ag-gemini DOES resume.
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 100, thirdPartyWeekly: 100 }),
+        );
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const second = yield* Queue.take(dispatched);
+        assert.equal("threadId" in second ? second.threadId : null, agGeminiThread.id);
+        assert.equal(yield* Queue.size(dispatched), 0);
+
+        // A completed run on pi-go clears the early-resume guard so a later recovery can early-resume.
+        const completedApplied = yield* Deferred.make<void>();
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "run.updated",
+            threadId: piGoThread.id,
+            payload: { status: "completed", startedAt: failedAgainAt },
+          } as unknown as OrchestrationV2DomainEvent,
+        });
+        yield* Queue.offer(domainEvents, {
+          event: {
+            type: "turn-item.updated",
+            threadId: piGoThread.id,
+            payload: { type: "assistant_message" },
+          } as unknown as OrchestrationV2DomainEvent,
+          onPull: completedApplied,
+        });
+        yield* Deferred.await(completedApplied);
+        yield* Ref.set(candidatesRef, [piProxyThread, piGoContinuationFailed]);
+        yield* TestClock.adjust("1 second");
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const afterCompleted = yield* Queue.take(dispatched);
+        assert.equal("threadId" in afterCompleted ? afterCompleted.threadId : null, piGoThread.id);
+        assert.isTrue(
+          afterCompleted.type === "message.dispatch" &&
+            afterCompleted.usageLimitResetObserved === true,
+        );
+
+        // A later manual run on pi-go (not a continuation of run 1) is NOT suppressed by run 1's guard.
+        yield* TestClock.adjust("5 seconds");
+        const manualFailedAt = yield* DateTime.now;
+        const piGoManualFailed = {
+          ...piGoContinuationFailed,
+          latestRunId: RunId.make("run:pi-go:3"),
+          latestRunUsageLimitContinuationOfRunId: null,
+          latestRunCompletedAt: manualFailedAt,
+          updatedAt: manualFailedAt,
+          limitRecovery: {
+            runId: RunId.make("run:pi-go:3"),
+            resetAt: revisedResetAt,
+            autoResume: true,
+            requestId: CommandId.make("recovery:pi-go:3"),
+          },
+        };
+        yield* Ref.set(candidatesRef, [piProxyThread, piGoManualFailed]);
+        yield* TestClock.adjust("1 second");
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 100, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const manualResumed = yield* Queue.take(dispatched);
+        assert.equal("threadId" in manualResumed ? manualResumed.threadId : null, piGoThread.id);
+        assert.isTrue(
+          manualResumed.type === "message.dispatch" &&
+            manualResumed.usageLimitResetObserved === true,
+        );
+
+        // Once the real reset clock passes, pi-proxy and pi-switched still auto-resume normally.
+        yield* Ref.set(candidatesRef, [piProxyThread, piSwitchedThread]);
+        yield* TestClock.setTime(Date.parse(revisedResetAt));
+        yield* Queue.offer(
+          providerChanges,
+          snapshot({ goRolling: 0, gemini5h: 0, thirdPartyWeekly: 100 }),
+        );
+        const third = yield* Queue.take(dispatched);
+        const fourth = yield* Queue.take(dispatched);
+        assert.deepEqual(
+          [
+            "threadId" in third ? third.threadId : null,
+            "threadId" in fourth ? fourth.threadId : null,
+          ],
+          [piProxyThread.id, piSwitchedThread.id],
+        );
+        assert.isFalse(third.type === "message.dispatch" && third.usageLimitResetObserved === true);
+        assert.isFalse(
+          fourth.type === "message.dispatch" && fourth.usageLimitResetObserved === true,
+        );
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("drops reset observations on logout/account clear and rechecks mid-sweep updates", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-07-01T00:00:00.000Z"));
+    const providerChanges = yield* Queue.unbounded<{
+      readonly providers: ReadonlyArray<ServerProvider>;
+      readonly onPull?: Deferred.Deferred<void>;
+    }>();
+    const dispatched = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
+    const sqlStarted = yield* Deferred.make<void>();
+    const releaseSql = yield* Deferred.make<void>();
+    const gateFirstSql = yield* Ref.make(false);
+    const sweeps = yield* Queue.unbounded<boolean>();
+    const now = yield* DateTime.now;
+    const futureResetAt = DateTime.formatIso(DateTime.add(now, { hours: 2 }));
+    const codexId = ProviderInstanceId.make("codex_main");
+    const makeCandidate = (runId: string, failedAt: DateTime.Utc) =>
+      waitingThread(futureResetAt, {
+        id: ThreadId.make("thread:codex-race"),
+        providerInstanceId: codexId,
+        latestRunId: RunId.make(runId),
+        latestRunModel: "gpt-5.3-codex",
+        threadModel: "gpt-5.3-codex",
+        latestRunUsageLimitContinuationOfRunId: null,
+        latestRunCompletedAt: failedAt,
+        updatedAt: failedAt,
+        limitRecovery: {
+          runId: RunId.make(runId),
+          resetAt: futureResetAt,
+          autoResume: true,
+          requestId: CommandId.make(`recovery:${runId}`),
+        },
+      });
+    const candidatesRef = yield* Ref.make<
+      ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>
+    >([makeCandidate("run:codex:1", DateTime.subtract(now, { minutes: 5 }))]);
+    // Pull one report at a time so an `onPull` barrier resolves only after the prior report's
+    // providerState Ref.update has committed.
+    const providerStream = Stream.fromEffect(
+      Queue.take(providerChanges).pipe(
+        Effect.tap((entry) =>
+          entry.onPull === undefined ? Effect.void : Deferred.succeed(entry.onPull, undefined),
+        ),
+        Effect.map((entry) => entry.providers),
+      ),
+    ).pipe(Stream.forever);
+    const layer = UsageLimitRecoveryWorker.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getUsageLimitFailuresWithoutReset: () => Effect.succeed([]),
+            getLimitRecoveryCandidates: (options) =>
+              Effect.gen(function* () {
+                if (options.resetObserved === true && (yield* Ref.getAndSet(gateFirstSql, false))) {
+                  yield* Deferred.succeed(sqlStarted, undefined);
+                  yield* Deferred.await(releaseSql);
+                }
+                yield* Queue.offer(sweeps, options.resetObserved === true);
+                return options.resetObserved === true ? yield* Ref.get(candidatesRef) : [];
+              }),
+            getLimitRecoveryWakeAt: () => Effect.succeed(null),
+            hasActivePullRequestThread: () => Effect.succeed(false),
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: (command) => Queue.offer(dispatched, command).pipe(Effect.as({} as never)),
+          }),
+          Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed({
+              autoResumeLimitedThreads: true,
+              autoResumePullRequestThreadsFirst: false,
+              snoozeLimitedThreads: false,
+            } as never),
+            streamChanges: Stream.never,
+          }),
+          layerProviderRegistry(providerStream),
+          layerResetSources(),
+        ),
+      ),
+    );
+    const codexSnapshot = (
+      usedPercent?: number | "unsupported" | "probeFailed",
+      options?: {
+        readonly fingerprint?: string;
+        readonly email?: string;
+        readonly workspaceId?: string;
+        readonly unauthenticated?: boolean;
+      },
+    ) =>
+      [
+        {
+          instanceId: codexId,
+          driver: ProviderDriverKind.make("codex"),
+          auth: {
+            status: options?.unauthenticated ? "unauthenticated" : "authenticated",
+            ...(options?.email === undefined ? {} : { email: options.email }),
+            ...(options?.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
+          },
+          ...(usedPercent === undefined
+            ? {}
+            : usedPercent === "unsupported" || usedPercent === "probeFailed"
+              ? { usageLimits: limits([], { unavailable: { reason: usedPercent } }) }
+              : {
+                  usageLimits: limits(
+                    [window("primary", usedPercent, futureResetAt)],
+                    options?.fingerprint === undefined
+                      ? {}
+                      : { credentialFingerprint: options.fingerprint },
+                  ),
+                }),
+        },
+      ] as unknown as ReadonlyArray<ServerProvider>;
+    yield* Effect.gen(function* () {
+      // 1. Mid-sweep invalidation: a reset triggers a sweep, then the window turns 100% spent
+      //    while SQL is in flight. The pre-dispatch recheck must cancel the stale early dispatch.
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "a@example.com" }),
+      });
+      yield* Queue.take(sweeps);
+      yield* Ref.set(gateFirstSql, true);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "a@example.com" }),
+      });
+      yield* Deferred.await(sqlStarted);
+      const spentApplied = yield* Deferred.make<void>();
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "a@example.com" }),
+      });
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "a@example.com" }),
+        onPull: spentApplied,
+      });
+      yield* Deferred.await(spentApplied);
+      yield* Deferred.succeed(releaseSql, undefined);
+      assert.equal(yield* Queue.take(sweeps), true);
+      // Coalesced follow-up sweep after the 100% update runs with no reset observations.
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 2. Direct account switch without credentialFingerprint (e.g. native Codex email switch)
+      //    must drop prior limits and reset markers so switching from 100% acct A to 0% acct B
+      //    does not fire a false reset.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:2", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "b@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 3. Explicit logout / unsupported usageLimits clears resetObservedWindows and seen limits.
+      yield* Ref.set(candidatesRef, []);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "b@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "b@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot("unsupported", { unauthenticated: true }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:3", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "c@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 4. Transient probeFailed on an unchanged account with both credentialFingerprint and
+      //    auth.email retains baseline limits so the subsequent 100 -> 0 recovery still fires.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:4", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "c@example.com", fingerprint: "fp-c" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot("probeFailed", { email: "c@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, {
+          email: "c@example.com",
+          workspaceId: "ws-c",
+          fingerprint: "fp-c",
+        }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      const recovered = yield* Queue.take(dispatched);
+      assert.isTrue(
+        recovered.type === "message.dispatch" && recovered.usageLimitResetObserved === true,
+      );
+
+      // 5. Losing or gaining account identity on a usable snapshot (e.g. account -> anonymous or
+      //    anonymous -> account) invalidates baselines and reset markers so an anonymous gap can
+      //    never fabricate or carry a reset across accounts.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:5", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "d@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      // Even if the anonymous snapshot itself observes 100 -> 0, switching to identified account E
+      // clears the anonymous reset marker instead of carrying it into E.
+      yield* Ref.set(candidatesRef, []);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(100) });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, { providers: codexSnapshot(0) });
+      assert.equal(yield* Queue.take(sweeps), true);
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:6", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 6. A thread whose failed run belonged to another provider instance (same model) must not
+      //    early-resume on this instance's reset.
+      yield* Ref.set(candidatesRef, [
+        {
+          ...makeCandidate("run:codex:7", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+          latestRunProviderInstanceId: ProviderInstanceId.make("codex_other"),
+        },
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "e@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 7. Disjoint non-empty identities ({ email } -> { workspaceId }) and dropped identity
+      //    fields (fingerprint or workspaceId) on a usable snapshot all invalidate baselines.
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:8", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "f@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { workspaceId: "ws-other" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "g@example.com", fingerprint: "fp-g" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "g@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(100, { email: "team@example.com", workspaceId: "ws-team" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: codexSnapshot(0, { email: "team@example.com" }),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      assert.equal(yield* Queue.size(dispatched), 0);
+
+      // 8. A sibling window resetting while another applicable window is still spent does not fire
+      //    merely because wall clock passes the spent window's resetsAt without a fresh probe—
+      //    even when an unrelated provider update re-emits the unchanged snapshot.
+      const shortBlockResetAt = DateTime.formatIso(
+        DateTime.add(yield* DateTime.now, { minutes: 5 }),
+      );
+      const multiWindowSnapshot = (primaryUsed: number, secondaryUsed: number, checkedAt: string) =>
+        [
+          {
+            instanceId: codexId,
+            driver: ProviderDriverKind.make("codex"),
+            auth: { status: "authenticated", email: "h@example.com" },
+            usageLimits: limits(
+              [
+                window("primary", primaryUsed, futureResetAt),
+                window("secondary", secondaryUsed, shortBlockResetAt),
+              ],
+              { checkedAt },
+            ),
+          },
+        ] as unknown as ReadonlyArray<ServerProvider>;
+      yield* Ref.set(candidatesRef, [
+        makeCandidate("run:codex:9", DateTime.subtract(yield* DateTime.now, { minutes: 1 })),
+      ]);
+      yield* Queue.offer(providerChanges, {
+        providers: multiWindowSnapshot(100, 100, "2026-07-01T00:00:00.000Z"),
+      });
+      assert.equal(yield* Queue.take(sweeps), false);
+      yield* Queue.offer(providerChanges, {
+        providers: multiWindowSnapshot(0, 100, "2026-07-01T00:01:00.000Z"),
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      assert.equal(yield* Queue.size(dispatched), 0);
+      // Advance past secondary's resetsAt and re-emit the exact unchanged codex snapshot (as
+      // happens when another provider changes or probe recovery preserves the old snapshot).
+      yield* TestClock.setTime(Date.parse(shortBlockResetAt) + 1_000);
+      yield* Queue.offer(providerChanges, {
+        providers: [
+          ...multiWindowSnapshot(0, 100, "2026-07-01T00:01:00.000Z"),
+          {
+            instanceId: ProviderInstanceId.make("claude_other"),
+            driver: ProviderDriverKind.make("claudeAgent"),
+          } as unknown as ServerProvider,
+        ],
+      });
+      assert.equal(yield* Queue.take(sweeps), true);
+      assert.equal(yield* Queue.size(dispatched), 0);
     }).pipe(Effect.provide(layer));
   }),
 );
