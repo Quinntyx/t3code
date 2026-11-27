@@ -15,6 +15,9 @@ type StallProps = {
   nextAttemptAt: string | null;
   /** A pending approval or question holds the retry back, so Retry now could do nothing. */
   requestPending: boolean;
+  /** Settled or archived threads are paused until reopened. */
+  paused?: boolean;
+  now?: number;
   timestampFormat: TimestampFormat;
   onAction: (action: "stop" | "retry") => Promise<void>;
 };
@@ -27,13 +30,18 @@ export function stallRecoveryBannerItem(
   props: StallProps,
   resolve: MessageResolver = m,
 ): ComposerBannerStackItem {
+  const nowMs = props.now ?? Date.now();
+  const nextAttemptMs = props.nextAttemptAt === null ? Number.NaN : Date.parse(props.nextAttemptAt);
   const nextAttempt =
-    props.nextAttemptAt === null
+    props.paused === true ||
+    props.nextAttemptAt === null ||
+    !Number.isFinite(nextAttemptMs) ||
+    nextAttemptMs <= nowMs
       ? null
       : formatUpcomingTimestamp(
           props.nextAttemptAt,
           props.timestampFormat,
-          undefined,
+          nowMs,
           undefined,
           resolve,
         );
@@ -54,7 +62,7 @@ export function stallRecoveryBannerItem(
   };
 }
 
-function StallActions({ requestPending, onAction }: StallProps) {
+function StallActions({ requestPending, paused, onAction }: StallProps) {
   const gt = useGT();
   const [pending, setPending] = useState<"stop" | "retry" | null>(null);
 
@@ -77,7 +85,7 @@ function StallActions({ requestPending, onAction }: StallProps) {
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
       <InlineButton
         touchTarget="padded"
-        disabled={pending !== null || requestPending}
+        disabled={pending !== null || requestPending || paused === true}
         onClick={() => void run("retry")}
       >
         {pending === "retry" ? gt("Retrying...") : gt("Retry now")}

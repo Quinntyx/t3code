@@ -4994,23 +4994,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         { turnItemTypes: ["error", "run_interrupt_request"] },
       );
       const run = stalledRun(projection.runs, projection.turnItems);
-      if (
-        run === null ||
-        thread.archivedAt !== null ||
-        thread.settledOverride === "settled" ||
-        projection.runtimeRequests.some((request) => request.status === "pending")
-      ) {
+      if (run === null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: "The thread is no longer stalled, so there is no retry to hurry.",
         });
       }
+      if (thread.archivedAt !== null || thread.settledOverride === "settled") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Unarchive or unsettle this thread before retrying it.",
+        });
+      }
+      if (projection.runtimeRequests.some((request) => request.status === "pending")) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Answer the pending request before retrying this thread.",
+        });
+      }
       const previous = thread.stallRecovery;
+      const nowMs = DateTime.toEpochMillis(now);
+      const previousMs =
+        previous?.runId === run.id ? Date.parse(previous.nextAttemptAt) : Number.NaN;
+      // Keep the retry-now timestamp immediately due and distinct from any prior attempt time
+      // so a same-millisecond retry still produces a fresh command id.
+      const retryAtMs = previousMs === nowMs ? nowMs - 1 : nowMs;
       stallRetryNowRecovery = {
         runId: run.id,
         attempt: previous?.runId === run.id ? previous.attempt : 1,
-        nextAttemptAt: DateTime.formatIso(now),
+        nextAttemptAt: DateTime.formatIso(DateTime.makeUnsafe(retryAtMs)),
       };
     }
     if (command.type === "thread.metadata.update" && command.stallRecovery != null) {

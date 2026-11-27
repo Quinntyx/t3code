@@ -2,6 +2,7 @@ import {
   CommandId,
   MessageId,
   RunId,
+  isUpstreamOverloadFailure,
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
   stallRetryDelayMs,
@@ -109,13 +110,17 @@ export function stallRecoveryCommand(
 }
 
 // A failed run and its overload failure may commit in either order; both publish after their
-// transaction, so sweeping on each lands the arm in the same batch.
+// transaction, so sweeping on each lands the arm in the same batch. Retry-now and unarchive/unsettle
+// also trigger an immediate sweep instead of waiting for the next periodic scheduler tick.
 export const isStallRecoverySignal = (event: OrchestrationV2DomainEvent) =>
   (event.type === "turn-item.updated" &&
     event.payload.type === "error" &&
-    event.payload.failure.overloaded === true) ||
+    isUpstreamOverloadFailure(event.payload.failure)) ||
   (event.type === "run.updated" && event.payload.status === "failed") ||
-  (event.type === "runtime-request.updated" && event.payload.status !== "pending");
+  (event.type === "runtime-request.updated" && event.payload.status !== "pending") ||
+  (event.type === "thread.metadata-updated" && event.payload.stallRecovery != null) ||
+  event.type === "thread.unarchived" ||
+  event.type === "thread.unsettled";
 
 // Events that can make a thread a candidate or change its command; streaming items cannot.
 const affectsStallRecovery = (event: OrchestrationV2DomainEvent) =>

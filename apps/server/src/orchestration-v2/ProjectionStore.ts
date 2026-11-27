@@ -5426,6 +5426,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
             LIMIT 1
           ), '$.failure.overloaded') = 1
+          AND json_extract((
+            SELECT error.payload_json FROM orchestration_v2_projection_turn_items error
+            WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
+              AND error.type = 'error' AND error.status = 'failed'
+              AND error.node_id IS json_extract(r.payload_json, '$.rootNodeId')
+            ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
+            LIMIT 1
+          ), '$.failure.class') IS NOT 'usage_limit'
           -- A Stop that reached the run ended its retries for good.
           AND NOT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_turn_items stopped
@@ -5488,6 +5496,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             FROM orchestration_v2_projection_threads
             WHERE deleted_at IS NULL
               AND archived_at IS NULL
+              AND json_extract(payload_json, '$.settledOverride') IS NOT 'settled'
               -- Spelled as in 113_OverloadedFailureIndex so the partial index serves it.
               AND CASE WHEN json_valid(payload_json) THEN
                 json_extract(payload_json, '$.stallRecovery.runId') IS NOT NULL
@@ -8236,51 +8245,54 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       findCursorEndIndex(indexed, decodeThreadHistoryCursor(cursor)),
                       indexed.length - 1,
                     );
-              while (workMode !== undefined) {
-                const { page } = selection;
-                const span = [...page.items.slice(0, 1), ...page.items.slice(-1)].map(
-                  (row) => row.canonicalPosition,
-                );
-                if (cursorPosition >= 0) span.push(cursorPosition);
-                if (span.length === 0) break;
-                const runs = new Map(
-                  // A work page holds rows of one run, which can be the rows that have no run.
-                  (workMode === "work"
-                    ? page.items.slice(0, 1)
-                    : indexed.slice(Math.min(...span), Math.max(...span) + 1)
-                  ).flatMap(({ sourceThreadId, item }) =>
-                    (workMode === "work" ||
-                      (item.runId !== null &&
-                        (item.runStatus === "completed" || item.attemptStatus === "superseded"))) &&
-                    !scannedRuns.has(`${sourceThreadId}:${item.runId}`)
-                      ? [
-                          [
-                            `${sourceThreadId}:${item.runId}`,
-                            { threadId: sourceThreadId, id: item.runId },
-                          ] as const,
-                        ]
-                      : [],
-                  ),
-                );
-                if (runs.size === 0) break;
-                for (const run of runs.keys()) scannedRuns.add(run);
-                const found = yield* sql<{ thread_id: string; turn_item_id: string }>`
+              if (workMode !== undefined) {
+                for (;;) {
+                  const { page } = selection;
+                  const span = [...page.items.slice(0, 1), ...page.items.slice(-1)].map(
+                    (row) => row.canonicalPosition,
+                  );
+                  if (cursorPosition >= 0) span.push(cursorPosition);
+                  if (span.length === 0) break;
+                  const runs = new Map(
+                    // A work page holds rows of one run, which can be the rows that have no run.
+                    (workMode === "work"
+                      ? page.items.slice(0, 1)
+                      : indexed.slice(Math.min(...span), Math.max(...span) + 1)
+                    ).flatMap(({ sourceThreadId, item }) =>
+                      (workMode === "work" ||
+                        (item.runId !== null &&
+                          (item.runStatus === "completed" ||
+                            item.attemptStatus === "superseded"))) &&
+                      !scannedRuns.has(`${sourceThreadId}:${item.runId}`)
+                        ? [
+                            [
+                              `${sourceThreadId}:${item.runId}`,
+                              { threadId: sourceThreadId, id: item.runId },
+                            ] as const,
+                          ]
+                        : [],
+                    ),
+                  );
+                  if (runs.size === 0) break;
+                  for (const run of runs.keys()) scannedRuns.add(run);
+                  const found = yield* sql<{ thread_id: string; turn_item_id: string }>`
           SELECT item.thread_id, item.turn_item_id
           FROM json_each(${yield* encodeTimelineSources([...runs.values()])}) AS wanted
           CROSS JOIN orchestration_v2_projection_turn_items AS item
             ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.run_id IS json_extract(wanted.value, '$.id')
           WHERE item.status = 'completed' AND item.inline_work_output = 1`;
-                if (found.length === 0) break;
-                for (const row of found)
-                  persistentOutputs.add(`${row.thread_id}:${row.turn_item_id}`);
-                selection = yield* select(
-                  indexed.map((row) =>
-                    persistentOutputs.has(`${row.sourceThreadId}:${row.sourceItemId}`)
-                      ? { ...row, item: { ...row.item, persistentOutput: true } }
-                      : row,
-                  ),
-                );
+                  if (found.length === 0) break;
+                  for (const row of found)
+                    persistentOutputs.add(`${row.thread_id}:${row.turn_item_id}`);
+                  selection = yield* select(
+                    indexed.map((row) =>
+                      persistentOutputs.has(`${row.sourceThreadId}:${row.sourceItemId}`)
+                        ? { ...row, item: { ...row.item, persistentOutput: true } }
+                        : row,
+                    ),
+                  );
+                }
               }
               return {
                 indexed,
@@ -10164,7 +10176,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 AND CASE WHEN json_valid(err.payload_json) THEN
                   json_extract(err.payload_json, '$.failure.overloaded') = 1
                   ELSE 0 END
+                AND json_extract(err.payload_json, '$.failure.class') IS NOT 'usage_limit'
                 AND err.run_id = latest_run.run_id
+                AND err.node_id IS json_extract(latest_run.payload_json, '$.rootNodeId')
                 AND latest_run.status = 'failed'
                 AND NOT EXISTS (
                   SELECT 1 FROM orchestration_v2_projection_turn_items stop

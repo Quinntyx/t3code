@@ -13014,6 +13014,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             payload: { ...(yield* store.getThread(threadId)), [field]: value },
           });
           assert.isEmpty(yield* store.getStallRecoveryCandidates());
+          assert.isNull(yield* store.getStallRecoveryWakeAt(now));
           yield* store.apply({
             id: EventId.make(`event:stall-recovery:${field}:restored`),
             type: "thread.metadata-updated",
@@ -13027,6 +13028,23 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           });
         }
         assert.lengthOf(yield* store.getStallRecoveryCandidates(), 1);
+
+        // A usage_limit error with overloaded: true is handled by limit recovery, never stall recovery.
+        yield* store.apply({
+          id: EventId.make("event:stall-recovery:usage-limit-overloaded"),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            ...overload(true),
+            updatedAt: DateTime.add(now, { seconds: 1 }),
+            failure: { ...overload(true).failure, class: "usage_limit" as const },
+          },
+        });
+        assert.isEmpty(yield* store.getStallRecoveryCandidates());
       }),
   );
 

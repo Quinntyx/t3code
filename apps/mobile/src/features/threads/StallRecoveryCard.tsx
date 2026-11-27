@@ -1,11 +1,13 @@
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useGT } from "gt-react-native";
+import { useGT, useMessages } from "gt-react-native";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
+import { useNowMinuteMs } from "../../lib/clock";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -21,17 +23,22 @@ export function StallRecoveryCard({
   environmentId: EnvironmentId;
 }) {
   const gt = useGT();
+  const m = useMessages();
+  const nowMs = useNowMinuteMs();
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata);
   const [pending, setPending] = useState<"stop" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const runtime = thread.runtime;
   const requestPending = thread.hasPendingApprovals || thread.hasPendingUserInput;
+  const paused = thread.archivedAt !== null || thread.settledOverride === "settled";
   if (runtime?.stalled !== true) return null;
-  // Absent until the server has scheduled the retry.
+  // Absent until the server has scheduled a future retry, or while paused.
+  const nextAttemptMs =
+    runtime.stallNextAttemptAt == null ? Number.NaN : Date.parse(runtime.stallNextAttemptAt);
   const nextAttempt =
-    runtime.stallNextAttemptAt == null
+    paused || !Number.isFinite(nextAttemptMs) || nextAttemptMs <= nowMs
       ? null
-      : new Date(runtime.stallNextAttemptAt).toLocaleString(undefined, {
+      : new Date(nextAttemptMs).toLocaleString(undefined, {
           hour: "numeric",
           minute: "2-digit",
         });
@@ -49,11 +56,8 @@ export function StallRecoveryCard({
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
       setError(
-        cause instanceof Error
-          ? cause.message
-          : action === "stop"
-            ? gt("Could not stop retrying.")
-            : gt("Could not retry now."),
+        errorDisplayMessage(cause, m) ??
+          (action === "stop" ? gt("Could not stop retrying.") : gt("Could not retry now.")),
       );
     }
   }
@@ -71,7 +75,7 @@ export function StallRecoveryCard({
       <View className="-mb-3 -mt-2 flex-row flex-wrap gap-x-4">
         <RecoveryAction
           label={gt("Retry now")}
-          disabled={pending !== null || requestPending}
+          disabled={pending !== null || requestPending || paused}
           onPress={() => void run("retry")}
         />
         <RecoveryAction

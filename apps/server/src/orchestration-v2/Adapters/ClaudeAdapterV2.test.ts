@@ -9292,6 +9292,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       overloaded: true,
     },
     {
+      name: "an error_during_execution 529 overload",
+      subtype: "error_during_execution" as const,
+      isError: true,
+      result: "API Error: 529 overloaded_error",
+      errors: ["API Error: 529 overloaded_error"],
+      expected: "API Error: 529 overloaded_error",
+      overloaded: true,
+    },
+    {
       name: "an HTTP 429 rate limit",
       isError: true,
       result: "API Error: 429 Specific rate limit detail.",
@@ -9369,6 +9378,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         harness.sdkMessages,
         makeResultFrame({
           uuid: "00000000-0000-4000-8000-000000000699",
+          ...("subtype" in input && input.subtype !== undefined ? { subtype: input.subtype } : {}),
           result: input.result,
           terminalReason: input.terminalReason ?? "api_error",
           apiErrorStatus,
@@ -9381,7 +9391,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.equal(terminal.status, "failed");
       if (terminal.status !== "failed") return;
       assert.equal(terminal.failure.message, input.expected);
-      assert.equal(terminal.failure.code, `api_error_${apiErrorStatus}`);
+      assert.equal(
+        terminal.failure.code,
+        "subtype" in input && input.subtype !== undefined
+          ? input.subtype
+          : `api_error_${apiErrorStatus}`,
+      );
       assert.equal(
         terminal.failure.class,
         apiErrorStatus === 429 ? "usage_limit" : "provider_error",

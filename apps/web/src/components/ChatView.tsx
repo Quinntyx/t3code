@@ -2797,6 +2797,10 @@ export default function ChatView(props: ChatViewProps) {
             threadId: activeThreadShell.id,
             nextAttemptAt: activeThreadShell.runtime?.stallNextAttemptAt ?? null,
             requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+            paused:
+              activeThreadShell.settledOverride === "settled" ||
+              activeThreadShell.archivedAt !== null,
+            now: Date.parse(`${nowMinute}:00Z`),
             timestampFormat,
             onAction: async (action) => {
               const result = await updateThreadMetadata({

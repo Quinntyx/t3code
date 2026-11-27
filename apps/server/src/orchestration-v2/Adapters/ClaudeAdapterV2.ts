@@ -4848,8 +4848,14 @@ function terminalResultError(
   }
 }
 
+const CLAUDE_OVERLOADED_PATTERN = /\b(?:api error:\s*529\b|overloaded_error\b|http\s+529\b)/i;
+
 function isOverloadedResult(result: SDKResultMessage): boolean {
-  return result.subtype === "success" && result.api_error_status === 529;
+  if (result.subtype === "success") {
+    if (result.api_error_status === 529) return true;
+    return result.is_error === true && CLAUDE_OVERLOADED_PATTERN.test(result.result);
+  }
+  return result.errors.some((error) => CLAUDE_OVERLOADED_PATTERN.test(error));
 }
 
 function terminalStatusFromResult(
@@ -5088,10 +5094,12 @@ function providerFailureFromResult(
       ? "Claude API rate limit reached. Try again later."
       : terminalResultError(message.terminal_reason, failureHint ?? apiErrorMessage);
   if (message.subtype !== "success") {
+    const overloaded = failureClass !== "usage_limit" && isOverloadedResult(message);
     return makeProviderFailure({
       message: listedError ?? structuredError ?? message.errors.join("\n"),
       code: message.subtype,
       class: failureClass,
+      ...(overloaded ? { retryable: true, overloaded: true } : {}),
     });
   }
   if (!message.is_error && structuredError === undefined) {

@@ -1,5 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
-import { RunId, RuntimeRequestId, ThreadId, stallRetryDelayMs } from "@t3tools/contracts";
+import {
+  type OrchestrationV2DomainEvent,
+  RunId,
+  RuntimeRequestId,
+  ThreadId,
+  stallRetryDelayMs,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -236,9 +242,19 @@ it("recognizes only events that can change stall recovery", () => {
   assert.isTrue(signal({ type: "run.updated", payload: { status: "failed" } }));
   assert.isFalse(signal({ type: "run.updated", payload: { status: "running" } }));
   assert.isTrue(signal(error({ class: "provider_error", overloaded: true })));
+  assert.isFalse(signal(error({ class: "usage_limit", overloaded: true })));
   assert.isFalse(signal(error({ class: "provider_error" })));
   assert.isTrue(signal({ type: "runtime-request.updated", payload: { status: "cancelled" } }));
   assert.isFalse(signal({ type: "runtime-request.updated", payload: { status: "pending" } }));
+  assert.isTrue(
+    signal({
+      type: "thread.metadata-updated",
+      payload: { stallRecovery: dueArm(startedAtMs) },
+    }),
+  );
+  assert.isFalse(signal({ type: "thread.metadata-updated", payload: { stallRecovery: null } }));
+  assert.isTrue(signal({ type: "thread.unarchived", payload: {} }));
+  assert.isTrue(signal({ type: "thread.unsettled", payload: {} }));
 });
 
 const dueArm = (atMs: number) => ({
@@ -251,7 +267,10 @@ const dueArm = (atMs: number) => ({
  * Runs the worker over a projection the test advances, and records what it sends. Its scheduler
  * registration is kept, so the test fires sweeps one at a time.
  */
-const sweepHarness = (thread: () => ProjectionStore.ProjectionStallRecoveryCandidate) =>
+const sweepHarness = (
+  thread: () => ProjectionStore.ProjectionStallRecoveryCandidate,
+  events?: Queue.Queue<OrchestrationV2DomainEvent>,
+) =>
   Effect.gen(function* () {
     const registration = yield* Queue.unbounded<Effect.Effect<void>>();
     const armed = yield* Queue.unbounded<number>();
@@ -284,7 +303,7 @@ const sweepHarness = (thread: () => ProjectionStore.ProjectionStallRecoveryCandi
               Queue.offer(dispatched, command.commandId).pipe(Effect.as({} as never)),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({
-            streamDomainEvents: Stream.never,
+            streamDomainEvents: events ? Stream.fromQueue(events) : Stream.never,
             autoArmStallRecovery: (arm) =>
               Queue.offer(armed, Date.parse(arm.stallRecovery.nextAttemptAt)).pipe(Effect.asVoid),
           }),
@@ -341,4 +360,35 @@ it.effect("a fresh worker over the same projection sends the same retry", () =>
       `stall-retry:${projection.id}:${runId}:1:${dueArm(startedAtMs).nextAttemptAt}`,
     );
   }),
+);
+
+it.effect(
+  "dispatches Retry now immediately from the metadata update without waiting for a tick",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(startedAtMs);
+      let thread = candidate({
+        latestRunCompletedAtMs: startedAtMs,
+        stallRecovery: dueArm(startedAtMs + 60_000),
+      });
+      const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+      const harness = yield* sweepHarness(() => thread, events);
+      yield* Effect.gen(function* () {
+        const sweep = yield* Queue.take(harness.registration);
+        // Park the due hint on the future retry time.
+        yield* sweep;
+        assert.isTrue(Option.isNone(yield* Queue.poll(harness.dispatched)));
+        // "Retry now" updates stallRecovery.nextAttemptAt to now and emits thread.metadata-updated.
+        const retryNow = dueArm(startedAtMs);
+        thread = candidate({ latestRunCompletedAtMs: startedAtMs, stallRecovery: retryNow });
+        yield* Queue.offer(events, {
+          type: "thread.metadata-updated",
+          payload: { stallRecovery: retryNow },
+        } as unknown as OrchestrationV2DomainEvent);
+        assert.equal(
+          yield* Queue.take(harness.dispatched),
+          `stall-retry:${thread.id}:${runId}:1:${retryNow.nextAttemptAt}`,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );
