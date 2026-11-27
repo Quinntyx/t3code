@@ -149,7 +149,7 @@ export default defineRule({
       CallExpression(node) {
         const callee = unwrapExpression(node.callee);
         if (Option.isNone(callee)) return;
-        if (namesOpenUrl(callee.value)) {
+        if (callee.value.type === "Identifier" && namesOpenUrl(callee.value)) {
           if (!reportedBindings.has(callee.value.name)) {
             context.report({ node: callee.value, message: MESSAGE });
           }

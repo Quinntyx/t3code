@@ -51,6 +51,7 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildWorkflowFeed,
   buildWorkflowTimeline,
@@ -467,16 +468,23 @@ export function WorkflowRunFeed({
             <h2 className="min-w-0 flex-1 text-base font-semibold break-words">{run.title}</h2>
             <WorkflowStateWord node={node} />
             {ended ? null : (
-              <Button
-                size="xs"
-                variant="ghost-destructive"
-                disabled={busy || !canCancel}
-                title={gt("Cancel run")}
-                onClick={() => void cancelRun()}
-              >
-                <SquareIcon className="size-2.5 fill-current" />
-                {gt("Stop")}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="ghost-destructive"
+                      disabled={busy || !canCancel}
+                      aria-label={gt("Cancel run")}
+                      onClick={() => void cancelRun()}
+                    />
+                  }
+                >
+                  <SquareIcon className="size-2.5 fill-current" />
+                  {gt("Stop")}
+                </TooltipTrigger>
+                <TooltipPopup>{gt("Cancel run")}</TooltipPopup>
+              </Tooltip>
             )}
           </div>
           <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">

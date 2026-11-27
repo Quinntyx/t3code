@@ -272,7 +272,7 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
-import { TooltipProvider } from "./ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
   composerDraftHasUserContent,
   DraftId,
@@ -3518,21 +3518,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   ) : null
                                 }
                                 settings={
-                                  <Button
-                                    size="icon-xs"
-                                    variant="ghost-muted"
-                                    tabIndex={-1}
-                                    aria-hidden="true"
-                                    title={gt("Project settings for {project}", {
-                                      project: project.displayName,
-                                    })}
-                                    onPointerDown={(event) => event.stopPropagation()}
-                                    onClick={(event) => {
-                                      void handleProjectSettings(event, project);
-                                    }}
-                                  >
-                                    <SettingsIcon className="size-3.5" />
-                                  </Button>
+                                  <Tooltip>
+                                    <TooltipTrigger
+                                      render={
+                                        <Button
+                                          size="icon-xs"
+                                          variant="ghost-muted"
+                                          tabIndex={-1}
+                                          aria-hidden="true"
+                                          onPointerDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            void handleProjectSettings(event, project);
+                                          }}
+                                        />
+                                      }
+                                    >
+                                      <SettingsIcon className="size-3.5" />
+                                    </TooltipTrigger>
+                                    <TooltipPopup side="right">
+                                      {gt("Project settings for {project}", {
+                                        project: project.displayName,
+                                      })}
+                                    </TooltipPopup>
+                                  </Tooltip>
                                 }
                               />
                             ) : (

@@ -1291,11 +1291,16 @@ function NewKeybindingCommandSelect({
                   <span>{commandLabel(command, m)}</span>
                   {shortcuts && (
                     <span className="flex shrink-0 flex-col items-end gap-1">
-                      {shortcuts.map((shortcut) => (
-                        <Kbd key={shortcut.id} title={shortcut.when || undefined}>
-                          {shortcut.label}
-                        </Kbd>
-                      ))}
+                      {shortcuts.map((shortcut) =>
+                        shortcut.when ? (
+                          <Tooltip key={shortcut.id}>
+                            <TooltipTrigger render={<Kbd>{shortcut.label}</Kbd>} />
+                            <TooltipPopup side="top">{shortcut.when}</TooltipPopup>
+                          </Tooltip>
+                        ) : (
+                          <Kbd key={shortcut.id}>{shortcut.label}</Kbd>
+                        ),
+                      )}
                     </span>
                   )}
                 </div>
