@@ -48,7 +48,10 @@ vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ theme: "t3-chat", resolvedTheme: "light", appearanceMode: "light" }),
 }));
 vi.mock("../hooks/useCustomThemes", () => ({ useCustomThemes: () => [] }));
-vi.mock("../hooks/useEnvironmentTheme", () => ({ useEnvironmentThemeDefinitions: () => [] }));
+vi.mock("../hooks/useEnvironmentTheme", () => ({
+  useEnvironmentStyleDefinitions: () => [],
+  useEnvironmentThemeDefinitions: () => [],
+}));
 vi.mock("../hooks/useSettings", async (original) => ({
   ...(await original<typeof import("../hooks/useSettings")>()),
   useClientSettings: () => DEFAULT_CLIENT_SETTINGS,

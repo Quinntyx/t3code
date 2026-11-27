@@ -17689,7 +17689,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Stream.filter(
         (stored) =>
           stored.event.type === "turn-item.updated" &&
-          stored.event.payload.type === "run_interrupt_request",
+          stored.event.payload.type === "run_interrupt_request" &&
+          stored.event.payload.providerTurnId === null,
       ),
       Stream.runForEach((stored) =>
         threadReactions.run(

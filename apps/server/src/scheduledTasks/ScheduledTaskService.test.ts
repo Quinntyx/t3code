@@ -531,6 +531,10 @@ it.effect("a one-time task is removed once its turn completes", () =>
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             sendToThread: (input) => Ref.set(sent, input.messageId).pipe(Effect.as({} as never)),
             getThreadShell: () => Effect.succeed(threadShell(projectId)),
+            getThreadRecords: () =>
+              Effect.succeed({
+                thread: { deletedAt: null, awaitedScheduledTaskIds: [] },
+              } as never),
             getProjectThreadRecords: () =>
               Effect.map(
                 Ref.get(sent),
@@ -603,6 +607,10 @@ it.effect("a paused one-time task run by hand before its time is kept", () =>
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             sendToThread: (input) => Ref.set(sent, input.messageId).pipe(Effect.as({} as never)),
             getThreadShell: () => Effect.succeed(threadShell(projectId)),
+            getThreadRecords: () =>
+              Effect.succeed({
+                thread: { deletedAt: null, awaitedScheduledTaskIds: [] },
+              } as never),
             getProjectThreadRecords: () =>
               Effect.map(
                 Ref.get(sent),
@@ -747,6 +755,10 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
                 deletedAt: null,
                 archivedAt: null,
                 projectId: ProjectId.make("project:test"),
+              } as never),
+            getThreadRecords: () =>
+              Effect.succeed({
+                thread: { deletedAt: null, awaitedScheduledTaskIds: [] },
               } as never),
             sendToThread: (input) =>
               Ref.update(sends, (all) => [

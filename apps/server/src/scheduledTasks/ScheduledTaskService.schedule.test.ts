@@ -254,7 +254,10 @@ it.effect("keeps one queued occurrence of a recurring task while its bound threa
               yield* sql`UPDATE scheduled_tasks SET last_run_status = 'failed',
                 last_run_error = 'Provider failed' WHERE task_id = 'scheduled-task:busy-thread'`;
             }
-            return (yield* Ref.get(thread)) as never;
+            return {
+              ...(yield* Ref.get(thread)),
+              thread: { deletedAt: null, awaitedScheduledTaskIds: [] },
+            } as never;
           }).pipe(Effect.orDie),
         getThreadShell: () =>
           Effect.succeed({

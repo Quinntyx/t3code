@@ -36,18 +36,33 @@ import {
 } from "./update.ts";
 
 // lsof listing one process, so prune sees a process list in which no runtime is running.
+const notPacmanResult = {
+  stdout: "",
+  stderr: "",
+  code: ChildProcessSpawner.ExitCode(1),
+  timedOut: false,
+  stdoutTruncated: false,
+  stderrTruncated: false,
+  stdoutInvalidUtf8: false,
+  stderrInvalidUtf8: false,
+} as const;
+
 const unrelatedLsof = ProcessRunner.ProcessRunner.of({
-  run: () =>
-    Effect.succeed({
-      stdout: "p1\nftxt\nn/usr/bin/true\n",
-      stderr: "",
-      code: ChildProcessSpawner.ExitCode(0),
-      timedOut: false,
-      stdoutTruncated: false,
-      stderrTruncated: false,
-      stdoutInvalidUtf8: false,
-      stderrInvalidUtf8: false,
-    }),
+  run: (input) =>
+    Effect.succeed(
+      input.command === "pacman"
+        ? notPacmanResult
+        : {
+            stdout: "p1\nftxt\nn/usr/bin/true\n",
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          },
+    ),
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -149,7 +164,15 @@ it.layer(NodeServices.layer)("t3 update under a managed policy", (it) => {
           }),
           // Refusals happen before the update touches the network, the service, or a process.
           Layer.mock(BootService.BootService, {}),
-          Layer.mock(ProcessRunner.ProcessRunner, {}),
+          Layer.succeed(
+            ProcessRunner.ProcessRunner,
+            ProcessRunner.ProcessRunner.of({
+              run: (input) =>
+                input.command === "pacman"
+                  ? Effect.succeed(notPacmanResult)
+                  : Effect.die(`unexpected process: ${input.command}`),
+            }),
+          ),
           Layer.succeed(HttpClient.HttpClient, httpClient),
         ),
       ),

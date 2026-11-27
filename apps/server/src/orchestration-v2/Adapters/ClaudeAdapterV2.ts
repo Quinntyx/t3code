@@ -8560,7 +8560,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     )
                   : undefined));
           const model = input.model ?? priorTask?.model ?? null;
-          const ownerRunId = input.owner?.task.runId ?? input.context.input.runId;
+          // Only a still-running owner has a live RunExecutionService for its run; replaying a
+          // finished owner's buffered grandchild on a wake turn must attach to the wake run.
+          const ownerAlive = input.owner?.task.status === "running";
+          const ownerRunId =
+            (ownerAlive ? input.owner?.task.runId : null) ?? input.context.input.runId;
           const task = {
             ...(priorTask ?? {
               id: nodeId,
@@ -8621,7 +8625,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   : existingSubagent?.confirmedOutcome,
             rootNodeId:
               existingSubagent?.rootNodeId ??
-              input.owner?.rootNodeId ??
+              (ownerAlive ? input.owner?.rootNodeId : undefined) ??
               input.context.input.rootNodeId,
             childThreadId,
             childRootNodeId,

@@ -114,7 +114,7 @@ function reset() {
     byThreadKey: {},
     voiceOpen: false,
     voiceActive: false,
-    visibleThreadKey: null,
+    visibleThreadKey: "env-1:thread-A",
     userActionRevisionByThreadKey: {},
     closeRevisionByThreadKey: {},
   });

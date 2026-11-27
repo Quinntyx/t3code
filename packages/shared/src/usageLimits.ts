@@ -1,5 +1,5 @@
 import {
-  EnvironmentId,
+  type EnvironmentId,
   type ModelSelection,
   type ServerSettings,
   type ProjectId,
@@ -408,7 +408,7 @@ export function resolveUsageLimitResetAt(
   return earliestNative;
 }
 
-const POOLED_LIMITS_ENVIRONMENT = EnvironmentId.make("routed-hub-pool");
+const POOLED_LIMITS_ENVIRONMENT = "routed-hub-pool" as EnvironmentId;
 
 /**
  * Resolves the merged limit pool for a hub-routed provider instance and model, including fresher
