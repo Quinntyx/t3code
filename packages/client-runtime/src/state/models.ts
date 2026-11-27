@@ -8,7 +8,7 @@ import type {
   EnvironmentId,
   MessageId,
   OrchestrationProjectShell,
-  OrchestrationV2Goal,
+  OrchestrationV2ProviderGoal,
   OrchestrationV2RunStatus,
   OrchestrationV2ProviderFailureClass,
   OrchestrationV2StallRecovery,
@@ -223,7 +223,7 @@ export interface EnvironmentThreadShell {
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
   >;
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
-  readonly goal: OrchestrationV2Goal | null;
+  readonly goal: OrchestrationV2ProviderGoal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;

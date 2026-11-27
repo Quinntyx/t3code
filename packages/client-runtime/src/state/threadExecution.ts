@@ -15,7 +15,7 @@ import {
   type ModelSelection,
   type OrchestrationV2NotificationSource,
   type OrchestrationV2PendingBackgroundTask,
-  type OrchestrationV2Goal,
+  type OrchestrationV2ProviderGoal,
   type OrchestrationV2ProviderSession,
   type ProviderOptionDescriptor,
   type ServerProvider,
@@ -966,7 +966,7 @@ export interface ProviderGoalPresentation {
   readonly canResume: boolean;
 }
 
-const PROVIDER_GOAL_TITLES: Record<OrchestrationV2Goal["status"], string> = {
+const PROVIDER_GOAL_TITLES: Record<OrchestrationV2ProviderGoal["status"], string> = {
   active: msg("Pursuing goal"),
   paused: msg("Goal paused"),
   blocked: msg("Goal blocked"),
@@ -983,7 +983,7 @@ function formatGoalTokens(tokens: number): string {
 }
 
 export function presentProviderGoal(
-  goal: OrchestrationV2Goal,
+  goal: OrchestrationV2ProviderGoal,
   working: boolean,
   resolve: MFunctionType = mFallback,
 ): ProviderGoalPresentation {

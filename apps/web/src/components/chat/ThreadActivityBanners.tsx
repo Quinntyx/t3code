@@ -1,6 +1,6 @@
 import type {
   EnvironmentId,
-  OrchestrationV2Goal,
+  OrchestrationV2ProviderGoal,
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderSession,
   ThreadId,
@@ -95,7 +95,7 @@ export function childInputNowItem(
 export function goalNowItem(
   input: {
     readonly threadId: ThreadId;
-    readonly goal: OrchestrationV2Goal;
+    readonly goal: OrchestrationV2ProviderGoal;
     readonly isWorking: boolean;
     readonly onSendCommand: (text: string, failureMessage: string) => Promise<void>;
   },

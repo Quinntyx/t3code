@@ -57,7 +57,6 @@ import {
   type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
-  type OrchestrationV2GoalStatus,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
@@ -79,7 +78,6 @@ import {
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderInteractionMode,
-  type ProviderThreadId,
   isRuntimeModeAbove,
   resolveProviderInstanceEnabled,
   resolveProjectProviderInstanceEnabled,
@@ -591,19 +589,6 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
   "t3/orchestration-v2/Orchestrator/OrchestratorV2",
 ) {}
 
-/** The goal that decides whether a goal command stops a running turn. T3 Code's own wins. */
-function threadGoalStatus(
-  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "providerThreads">,
-  providerThreadId: ProviderThreadId | null,
-): OrchestrationV2GoalStatus | null {
-  const own = projection.thread.goal;
-  if (own != null) return own.status;
-  return (
-    projection.providerThreads.find((candidate) => candidate.id === providerThreadId)?.goal
-      ?.status ?? null
-  );
-}
-
 /** Run ordinals can skip values: a queued run moves past newer runs when it starts. */
 function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
   return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
@@ -698,7 +683,6 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
-    case "thread.goal.update":
     case "thread.pull-request.link":
     case "thread.pull-request.unlink":
     case "thread.pull-request-link.sync":
@@ -4517,7 +4501,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.active.reorder"
           | "thread.mark-unread"
           | "thread.metadata.update"
-          | "thread.goal.update"
           | "thread.pull-request.link"
           | "thread.pull-request.unlink"
           | "thread.pull-request-link.sync"
@@ -4750,8 +4733,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         command.expectedLatestRunId !== undefined &&
-        (thread.goal?.status === "active" ||
-          (thread.awaitedScheduledTaskIds?.length ?? 0) > 0 ||
+        ((thread.awaitedScheduledTaskIds?.length ?? 0) > 0 ||
           (thread.threadWatches?.length ?? 0) > 0)
       ) {
         return yield* new OrchestratorDispatchError({
@@ -5141,22 +5123,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       markUnreadVisitedAt = DateTime.subtract(latestRunCompletedAt, { milliseconds: 1 });
     }
-    if (
-      command.type === "thread.goal.update" &&
-      command.goal !== null &&
-      command.goal.objective === undefined &&
-      thread.goal == null
-    ) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: `Thread ${command.threadId} has no goal to update.`,
-      });
-    }
-    const switchesToNativeGoal =
-      (command.type === "thread.model-selection.set" || command.type === "provider.switch") &&
-      thread.goal != null &&
-      (yield* goalDriverFor(command, command.modelSelection.instanceId)) !== undefined;
     const updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
         case "thread.archive":
@@ -5712,16 +5678,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             threadWatches: command.watching ? [...others, command.watch] : others,
           };
         }
-        case "thread.goal.update": {
-          const objective = command.goal?.objective ?? thread.goal?.objective;
-          const goal =
-            command.goal === null || objective === undefined
-              ? null
-              : { objective, status: command.goal.status };
-          return goal?.objective === thread.goal?.objective && goal?.status === thread.goal?.status
-            ? thread
-            : { ...thread, goal, updatedAt: now };
-        }
         case "thread.title.regeneration.complete":
           return thread.titleRegeneration?.requestId === command.requestId
             ? {
@@ -5752,7 +5708,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             providerInstanceId: command.modelSelection.instanceId,
             modelSelection: command.modelSelection,
-            ...(switchesToNativeGoal ? { goal: null } : {}),
             updatedAt: now,
           };
       }
@@ -5821,7 +5776,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
-        case "thread.goal.update":
         case "thread.title.regeneration.complete":
         case "thread.thread-watch.sync":
           return "thread.metadata-updated" as const;
@@ -5845,10 +5799,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.provider-switched" as const;
       }
     })();
-    const goalActivated =
-      eventType === "thread.metadata-updated" &&
-      thread.goal?.status !== "active" &&
-      updatedThread.goal?.status === "active";
     yield* emit(
       events,
       command,
@@ -5858,7 +5808,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       providerInstanceId: updatedThread.providerInstanceId,
       occurredAt: now,
       payload: updatedThread,
-      ...(goalActivated ? { goalActivated: true } : {}),
     });
     // Stop retrying leaves the mark a Stop leaves, or the next sweep would arm the run again.
     if (command.type === "thread.metadata.update" && command.stallRecovery === null) {
@@ -7883,8 +7832,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection = applyToProjection(projection, event);
     }
     let modelSelection = command.modelSelection ?? projection.thread.modelSelection;
-    // Goal commands (native or T3-managed) must not steer an existing turn.
-    const goalCommand = parseGoalCommand(command);
+    // Native goal commands must not steer an existing turn.
+    const parsedGoalCommand = parseGoalCommand(command);
+    const goalCommand =
+      parsedGoalCommand === null ||
+      (yield* goalDriverFor(command, modelSelection.instanceId)) === undefined
+        ? null
+        : parsedGoalCommand;
     // A goal command keeps the run it was sent at; the goal handling below queues it.
     let dispatchMode =
       goalCommand === null
@@ -8010,13 +7964,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ? projection.runs.findLast(isLiveRun)
             : undefined;
       if (target !== undefined) {
-        const goalStatus = threadGoalStatus(projection, target.providerThreadId);
+        const goal = projection.providerThreads.find(
+          (candidate) => candidate.id === target.providerThreadId,
+        )?.goal;
         const targetMessage = projection.messages.find(
           (message) => message.id === target.userMessageId,
         );
         if (
           isLiveRun(target) &&
-          goalCommandStopsActiveRun(goalCommand, goalStatus) &&
+          goalCommandStopsActiveRun(goalCommand, goal?.status ?? null) &&
           (targetMessage === undefined || !isNativeMaintenanceCommand(targetMessage)) &&
           !(yield* stopReachedRun(command, command.threadId, target.id))
         ) {
@@ -8165,7 +8121,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         active !== undefined &&
         activeTurn !== undefined &&
         providerThread?.providerSessionId != null &&
-        (!commandNotice || threadGoalStatus(projection, active.providerThreadId) === "active") &&
+        (!commandNotice || providerThread.goal?.status === "active") &&
         (activeMessage === undefined || !isNativeMaintenanceCommand(activeMessage))
       ) {
         const session = yield* providerSessions
@@ -8372,84 +8328,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       modelSelection = queueTailModelSelection(projection);
     }
     yield* ensureGoalCommandSupported(command, command, modelSelection.instanceId);
-    // Codex and Claude own /goal. Everywhere else T3 Code keeps the goal on the thread and
-    // drives its turns, so its control commands are not provider input. Ownership follows
-    // the provider the command runs on, which a pick queued ahead of it may have chosen.
-    const t3GoalCommand =
-      goalCommand !== null &&
-      (yield* goalDriverFor(command, modelSelection.instanceId)) === undefined
-        ? goalCommand
-        : null;
-    if (t3GoalCommand !== null && t3GoalCommand.type !== "set") {
-      const now = yield* DateTime.now;
-      const current = projection.thread.goal ?? null;
-      const nextGoal =
-        t3GoalCommand.type === "clear" || current === null
-          ? null
-          : {
-              ...current,
-              status: t3GoalCommand.type === "pause" ? ("paused" as const) : ("active" as const),
-            };
-      // `show` changes nothing: the thread's goal line already answers it.
-      if (t3GoalCommand.type !== "show" && nextGoal?.status !== current?.status) {
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "thread.metadata-updated",
-          threadId: command.threadId,
-          providerInstanceId: projection.thread.providerInstanceId,
-          occurredAt: now,
-          payload: { ...projection.thread, goal: nextGoal },
-          ...(nextGoal?.status === "active" ? { goalActivated: true } : {}),
-        });
-        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-      }
-      const target = projection.runs.findLast(isLiveRun);
-      if (
-        target !== undefined &&
-        goalCommandStopsActiveRun(t3GoalCommand, current?.status ?? null)
-      ) {
-        yield* stopRunForGoalCommand({
-          command,
-          events,
-          effects,
-          targetRunId: target.id,
-        });
-      }
-      return;
-    }
-    if (t3GoalCommand !== null) {
-      const now = yield* DateTime.now;
-      yield* emit(
-        events,
-        command,
-      )({
-        type: "thread.metadata-updated",
-        threadId: command.threadId,
-        providerInstanceId: projection.thread.providerInstanceId,
-        occurredAt: now,
-        payload: {
-          ...projection.thread,
-          goal: { objective: t3GoalCommand.objective, status: "active" },
-        },
-      });
-      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-    }
-    // A provider's native goal takes over from the one T3 Code was driving.
-    if (goalCommand !== null && t3GoalCommand === null && projection.thread.goal != null) {
-      yield* emit(
-        events,
-        command,
-      )({
-        type: "thread.metadata-updated",
-        threadId: command.threadId,
-        providerInstanceId: projection.thread.providerInstanceId,
-        occurredAt: yield* DateTime.now,
-        payload: { ...projection.thread, goal: null },
-      });
-      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
-    }
     // Client messages resume held queues; server continuations and scheduled tasks do not.
     // Provider failure or usage limits re-hold the queue.
     const worktreeSetupUnresolved = worktreeSetupPending(projection);
@@ -10448,16 +10326,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const parentRun = parentProjection.runs.find(
         (candidate) => candidate.id === command.parentRunId,
       );
-      // A goal review is the server's own follow-up to a goal turn that already settled.
-      const settledGoalReview =
-        command.purpose === "goal_review" && parentRun?.status === "completed";
       if (
         parentRun === undefined ||
-        !(
-          isActiveRun(parentRun) ||
-          settledGoalReview ||
-          (yield* backgroundSubagentOutlivesRun(parentRun))
-        )
+        !(isActiveRun(parentRun) || (yield* backgroundSubagentOutlivesRun(parentRun)))
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -10533,8 +10404,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
         ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
-        // The reviewer judges the parent's goal; it does not carry one of its own.
-        ...(command.purpose === "goal_review" ? { goal: null } : {}),
       };
       const task: OrchestrationV2Subagent = {
         id: taskNodeId,
@@ -10553,10 +10422,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         model: command.modelSelection.model,
         modelSelection: command.modelSelection,
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
-        ...(command.purpose === undefined ? {} : { purpose: command.purpose }),
-        ...(command.purpose === "goal_review"
-          ? { completionDelivery: { state: "disposed" as const, observedByRunId: null } }
-          : {}),
         status: "running",
         result: null,
         startedAt: now,
@@ -12664,7 +12529,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const emitEvent = emit(events, command);
     // A scheduled delivery steers on the thread's current pick, so /goal must suit that provider.
     const modelSelection = queuedRunModelSelection(projection, queuedRun);
-    const goalCommand = parseGoalCommand(queuedMessage);
+    const parsedGoalCommand = parseGoalCommand(queuedMessage);
+    const goalCommand =
+      parsedGoalCommand === null ||
+      (yield* goalDriverFor(command, modelSelection.instanceId)) === undefined
+        ? null
+        : parsedGoalCommand;
     const target = projection.runs.find((run) => run.id === command.targetRunId);
     const targetMessage = projection.messages.find(
       (message) => message.id === target?.userMessageId,
@@ -12721,7 +12591,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (goalCommand !== null) {
         yield* ensureGoalCommandSupported(command, queuedMessage, modelSelection.instanceId);
       }
-      const goalStatus = threadGoalStatus(projection, target?.providerThreadId ?? null);
+      const goal = projection.providerThreads.find(
+        (candidate) => candidate.id === target?.providerThreadId,
+      )?.goal;
       yield* emitEvent({
         type: "run.updated",
         threadId: command.threadId,
@@ -12735,7 +12607,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         goalCommand !== null &&
         target !== undefined &&
         isLiveRun(target) &&
-        goalCommandStopsActiveRun(goalCommand, goalStatus) &&
+        goalCommandStopsActiveRun(goalCommand, goal?.status ?? null) &&
         (targetMessage === undefined || !isNativeMaintenanceCommand(targetMessage)) &&
         !(yield* stopReachedRun(command, command.threadId, target.id));
       return yield* stopRunForQueuedCommand({
@@ -15096,43 +14968,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
   );
 
-  /** A goal control command stops the turn it ends without a message of its own. */
-  const stopRunForGoalCommand = Effect.fn("Orchestrator.stopRunForGoalCommand")(function* (input: {
-    readonly command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
-    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
-    readonly effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>;
-    readonly targetRunId: RunId;
-  }) {
-    const interruptEvents = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
-    const interruptEffects = yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]);
-    const interrupted = yield* Effect.exit(
-      dispatchRunInterrupt(
-        {
-          type: "run.interrupt",
-          commandId: input.command.commandId,
-          threadId: input.command.threadId,
-          runId: input.targetRunId,
-          reason: "Stopped to apply /goal",
-        },
-        interruptEvents,
-        interruptEffects,
-      ),
-    );
-    // A failed interrupt may have written part of its events, so they are kept apart.
-    if (Exit.isFailure(interrupted)) {
-      yield* Effect.logWarning("goal command could not stop the running turn", {
-        threadId: input.command.threadId,
-        runId: input.targetRunId,
-        cause: interrupted.cause,
-      });
-      return;
-    }
-    const written = yield* Ref.get(interruptEvents);
-    const enqueued = yield* Ref.get(interruptEffects);
-    yield* Ref.update(input.events, (existing) => [...existing, ...written]);
-    yield* Ref.update(input.effects, (existing) => [...existing, ...enqueued]);
-  });
-
   /** Puts a queued command first and, given a target, stops the run in its way. */
   const stopRunForQueuedCommand = Effect.fn("Orchestrator.stopRunForQueuedCommand")(
     function* (input: {
@@ -16687,7 +16522,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
         if (
           thread.settledOverride !== null ||
-          thread.goal?.status === "active" ||
           (thread.awaitedScheduledTaskIds?.length ?? 0) > 0 ||
           (thread.threadWatches?.length ?? 0) > 0 ||
           DateTime.toEpochMillis(thread.updatedAt) > DateTime.toEpochMillis(command.snapshotAt)
@@ -16815,7 +16649,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.active.reorder":
       case "thread.tag.set":
       case "thread.mark-unread":
-      case "thread.goal.update":
       case "thread.pull-request.link":
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":

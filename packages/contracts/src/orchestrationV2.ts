@@ -503,37 +503,6 @@ export function stallRetryDelayMs(attempt: number): number {
   return Math.min(STALL_RETRY_BASE_MS * 2 ** exponent, STALL_RETRY_MAX_MS);
 }
 
-export const OrchestrationV2GoalStatus = Schema.Literals([
-  "active",
-  "paused",
-  "blocked",
-  "usage_limited",
-  "budget_limited",
-  "complete",
-]);
-export type OrchestrationV2GoalStatus = typeof OrchestrationV2GoalStatus.Type;
-
-/**
- * The thread's goal. A provider with native goals owns the state and fills in its telemetry;
- * elsewhere T3 Code keeps the objective and status and drives the turns itself.
- */
-export const OrchestrationV2Goal = Schema.Struct({
-  objective: TrimmedNonEmptyString,
-  status: OrchestrationV2GoalStatus,
-  tokensUsed: Schema.optional(NonNegativeInt),
-  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
-  timeUsedSeconds: Schema.optional(NonNegativeInt),
-  checks: Schema.optional(NonNegativeInt),
-  lastCheck: Schema.optional(Schema.String),
-});
-export type OrchestrationV2Goal = typeof OrchestrationV2Goal.Type;
-
-// Aliases kept so upstream callers naming OrchestrationV2ProviderGoal keep compiling.
-export const OrchestrationV2ProviderGoalStatus = OrchestrationV2GoalStatus;
-export type OrchestrationV2ProviderGoalStatus = OrchestrationV2GoalStatus;
-export const OrchestrationV2ProviderGoal = OrchestrationV2Goal;
-export type OrchestrationV2ProviderGoal = OrchestrationV2Goal;
-
 /**
  * `score` is an open count that halves every two weeks, as of `openedAt`.
  * `picks` stores lowercase palette queries, newest first.
@@ -595,10 +564,6 @@ export const OrchestrationV2AppThread = Schema.Struct({
   awaitedScheduledTaskIds: Schema.optional(Schema.Array(ScheduledTaskId)),
   threadWatches: Schema.optional(Schema.Array(OrchestrationV2ThreadWatch)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
-  /** A goal T3 Code drives itself. Providers with native goals keep theirs on the provider thread. */
-  goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
@@ -789,28 +754,6 @@ export function parseGoalCommand(message: {
     default:
       return { type: "set", objective: argument };
   }
-}
-
-/** The instruction a provider receives for a goal T3 Code drives itself. */
-export function goalTurnPrompt(objective: string): string {
-  return [
-    `Goal for this thread: ${objective}`,
-    "",
-    'Keep working until the goal is met. A reviewer checks the thread each time you stop and decides whether to continue, so do not stop early. Call the `t3_goal` tool with action "blocked" and what is missing if you cannot finish.',
-  ].join("\n");
-}
-
-/** The task a goal-review delegate receives once a goal turn settles. */
-export function goalReviewPrompt(input: {
-  readonly objective: string;
-  readonly threadId: ThreadId;
-}): string {
-  return [
-    `Review whether the goal of thread ${input.threadId} is met: ${input.objective}`,
-    "",
-    `Read that thread's recent work with t3_thread_read and inspect the repository yourself. Judge the work, not the agent's claim about it.`,
-    `If the goal is met, call t3_goal with threadId ${input.threadId} and action "complete". If it cannot be met, call it with action "blocked". If more work is needed, leave the goal alone and reply with what remains.`,
-  ].join("\n");
 }
 
 /** Why T3 Code sent this `/compact` on its own, or undefined for one someone asked for. */
@@ -1156,8 +1099,6 @@ export const OrchestrationV2Subagent = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   executedModel: Schema.optional(Schema.String),
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
-  /** Set on the server's own goal-review delegate; it never delivers a completion wake. */
-  purpose: Schema.optional(Schema.Literal("goal_review")),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   // The run whose unfinished task was cancelled, committed with its Stop.
   cancelledRunId: Schema.optional(RunId),
@@ -1340,6 +1281,27 @@ export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
 export type OrchestrationV2ProviderThreadNativeMetadata =
   typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
 
+export const OrchestrationV2ProviderGoalStatus = Schema.Literals([
+  "active",
+  "paused",
+  "blocked",
+  "usage_limited",
+  "budget_limited",
+  "complete",
+]);
+export type OrchestrationV2ProviderGoalStatus = typeof OrchestrationV2ProviderGoalStatus.Type;
+
+export const OrchestrationV2ProviderGoal = Schema.Struct({
+  objective: TrimmedNonEmptyString,
+  status: OrchestrationV2ProviderGoalStatus,
+  tokensUsed: Schema.optional(NonNegativeInt),
+  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  timeUsedSeconds: Schema.optional(NonNegativeInt),
+  checks: Schema.optional(NonNegativeInt),
+  lastCheck: Schema.optional(Schema.String),
+});
+export type OrchestrationV2ProviderGoal = typeof OrchestrationV2ProviderGoal.Type;
+
 export const OrchestrationV2ProviderThread = Schema.Struct({
   id: ProviderThreadId,
   driver: ProviderDriverKind,
@@ -1369,7 +1331,7 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
   nativeMetadata: Schema.optional(Schema.NullOr(OrchestrationV2ProviderThreadNativeMetadata)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)).pipe(
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   createdAt: Schema.DateTimeUtc,
@@ -2354,15 +2316,9 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.model-selection-updated",
       "thread.provider-switched",
       "thread.guest-share-updated",
+      "thread.metadata-updated",
     ]),
     payload: OrchestrationV2AppThread,
-  }),
-  Schema.Struct({
-    ...OrchestrationV2EventBase.fields,
-    type: Schema.Literal("thread.metadata-updated"),
-    payload: OrchestrationV2AppThread,
-    /** Set when this update transitions the thread's goal into `active` so GoalLoopService can resume it. */
-    goalActivated: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
@@ -2608,7 +2564,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   providerInstanceHistory: Schema.optional(Schema.Array(ProviderInstanceId)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  goal: Schema.optional(Schema.NullOr(OrchestrationV2Goal)),
+  goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)),
   itemCount: NonNegativeInt,
   visibleItemCount: NonNegativeInt,
   createdAt: Schema.DateTimeUtc,
@@ -3699,18 +3655,6 @@ export const OrchestrationV2Command = Schema.Union([
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   }),
   Schema.Struct({
-    type: Schema.Literal("thread.goal.update"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    /** Null clears the goal. Without `objective`, the goal keeps the objective it has. */
-    goal: Schema.NullOr(
-      Schema.Struct({
-        objective: Schema.optional(TrimmedNonEmptyString),
-        status: Schema.Literals(["active", "paused", "complete", "blocked"]),
-      }),
-    ),
-  }),
-  Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
     commandId: CommandId,
     threadId: ThreadId,
@@ -4016,11 +3960,6 @@ export const OrchestrationV2Command = Schema.Union([
     workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
     // Defaults to settled_only; fire-and-forget wakes require always.
     completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
-    /**
-     * A goal review the server starts once a goal turn settles. Its parent run may already be
-     * finished, and its own completion never wakes the parent: the goal loop reads the verdict.
-     */
-    purpose: Schema.optional(Schema.Literal("goal_review")),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({

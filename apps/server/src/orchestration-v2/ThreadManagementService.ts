@@ -108,12 +108,8 @@ export function withCreationProvenance(
     case "message.dispatch":
     case "thread.fork":
     case "thread.merge_back":
+    case "delegated_task.request":
       return { ...command, ...provenance };
-    case "delegated_task.request": {
-      // Only the server starts a goal review, so a caller cannot name a settled parent run.
-      const { purpose: _purpose, ...rest } = command;
-      return { ...rest, ...provenance };
-    }
     default:
       return command;
   }

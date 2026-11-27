@@ -331,7 +331,6 @@ export type ProjectionSettlementCandidate = Pick<
   | "pendingRuntimeRequest"
   | "pendingBackgroundTasks"
   | "pendingGuestMessageCount"
-  | "goal"
   | "stallRecovery"
   | "stalled"
 > &
@@ -2158,7 +2157,10 @@ export function threadShellFromProjection(
       threadId: projection.thread.id,
       providerThreads: projection.providerThreads,
     }),
-    goal: threadGoalForShell(projection.thread, projection.providerThreads),
+    goal: activeProviderGoalForShell(
+      projection.providerThreads,
+      projection.thread.activeProviderThreadId,
+    ),
     itemCount: activeLocalTurnItems(projection).length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
@@ -2205,16 +2207,11 @@ function providerInstanceHistoryForShell(input: {
   return history;
 }
 
-/** T3 Code's own goal wins; a provider's native goal fills in when the thread has none. */
-function threadGoalForShell(
-  thread: Pick<OrchestrationV2ThreadProjection["thread"], "goal" | "activeProviderThreadId">,
+function activeProviderGoalForShell(
   providerThreads: ReadonlyArray<OrchestrationV2ThreadProjection["providerThreads"][number]>,
+  activeProviderThreadId: OrchestrationV2ThreadProjection["thread"]["activeProviderThreadId"],
 ): OrchestrationV2ThreadShell["goal"] {
-  if (thread.goal != null) return thread.goal;
-  return (
-    providerThreads.find((candidate) => candidate.id === thread.activeProviderThreadId)?.goal ??
-    null
-  );
+  return providerThreads.find((thread) => thread.id === activeProviderThreadId)?.goal ?? null;
 }
 
 function isSilentRunForShell(
@@ -9476,7 +9473,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND json_extract(t.payload_json, '$.settledOverride') IS NULL
               AND json_extract(t.payload_json, '$.pinnedAt') IS NULL
               AND json_extract(t.payload_json, '$.autoSettleDisabledAt') IS NULL
-              AND COALESCE(json_extract(t.payload_json, '$.goal.status'), '') != 'active'
               AND (
                 json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
                 OR NOT EXISTS (
@@ -9862,7 +9858,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             threadId: thread.id,
             providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],
           }),
-          goal: threadGoalForShell(thread, providerThreadsByThreadId.get(thread.id) ?? []),
+          goal: activeProviderGoalForShell(
+            providerThreadsByThreadId.get(thread.id) ?? [],
+            thread.activeProviderThreadId,
+          ),
           itemCount: shellItemCountsByThreadId.get(thread.id)?.itemCount ?? 0,
           runlessItemCount: shellItemCountsByThreadId.get(thread.id)?.runlessItemCount ?? 0,
           updatedAt: thread.updatedAt,

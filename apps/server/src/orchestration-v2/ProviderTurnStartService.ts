@@ -15,7 +15,6 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
-  goalTurnPrompt,
   isDeliveredProviderTurn,
   parseGoalCommand,
   RunId,
@@ -1048,32 +1047,22 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const parsedGoal = parseGoalCommand(providerMessage);
+      const messageText = withMessageSenderNote(
+        providerMessage,
+        projectComposerContextForProvider({
+          text: providerMessage.text,
+          records: providerMessage.context?.records ?? [],
+        }),
+      );
       const slashCommand = isSlashCommandMessage(providerMessage);
       const goalDriver =
         session.driver === "codex" ||
         session.driver === "claudeAgent" ||
         session.providerSession.capabilities.turns.supportsNativeGoals === true;
-      // Native goal commands go verbatim; handoff history waits a turn.
-      const goalCommand = goalDriver && parsedGoal !== null;
-      // Non-native `/goal <objective>` expands to a normal prompt, so inline handoffs and context apply.
-      const providerSlashCommand = slashCommand && !(!goalDriver && parsedGoal?.type === "set");
-      // Elsewhere T3 Code owns the goal, so the provider gets the objective as an instruction.
-      const messageText = withMessageSenderNote(
-        providerMessage,
-        projectComposerContextForProvider({
-          text:
-            !goalDriver && parsedGoal?.type === "set"
-              ? goalTurnPrompt(parsedGoal.objective)
-              : providerMessage.text,
-          records: providerMessage.context?.records ?? [],
-        }),
-      );
+      const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
       // Part of the user text, so every way a turn starts carries it, after the user's own words.
       const userText =
-        run.outputSchema === undefined ||
-        goalCommand ||
-        (isProviderCommand(providerMessage) && !(!goalDriver && parsedGoal?.type === "set"))
+        run.outputSchema === undefined || goalCommand || isProviderCommand(providerMessage)
           ? messageText
           : `${messageText}\n\n${outputInstructions(run.outputSchema)}`;
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
@@ -1747,7 +1736,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: context.budget,
-            deferInline: providerSlashCommand,
+            deferInline: slashCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -2151,7 +2140,7 @@ export const layer: Layer.Layer<
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {
           const delivery = yield* deliverContextHandoffs({
             handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
-            deferInline: compact || providerSlashCommand,
+            deferInline: compact || slashCommand,
             providerThread: runningProviderThread,
             budget,
             alreadyDeliveredItemIds: deliveredItemIds,
@@ -2170,7 +2159,7 @@ export const layer: Layer.Layer<
           const start = compact ? session.compactThread! : session.startTurn;
           // Like history, the side chat context waits for a turn that sends a prompt.
           const sideChatContext =
-            sideChatHandoff === undefined || compact || providerSlashCommand
+            sideChatHandoff === undefined || compact || slashCommand
               ? ""
               : sideChatHandoff.summaryText;
           // Record inline handoffs before startTurn so an immediate dropped terminal can restore them.
@@ -2190,7 +2179,7 @@ export const layer: Layer.Layer<
           const { resume: _resume, ...contextInput } = startInput;
           const { message: resumeMessage, resume: _resumeIntent, ...resumeInput } = startInput;
           const missedAttachments =
-            compact || providerSlashCommand
+            compact || slashCommand
               ? []
               : retryHandoff.attachments.filter(
                   (missed) =>
@@ -2201,7 +2190,7 @@ export const layer: Layer.Layer<
           // A resume that must be prompted still needs a request, or the agent has nothing to do.
           const requestText =
             turnInput.resume && prompted && userText === "" ? RESUME_PROMPT : userText;
-          const text = providerSlashCommand ? userText : withInlineContext(context, requestText);
+          const text = slashCommand ? userText : withInlineContext(context, requestText);
           const operation =
             turnInput.resume && !prompted
               ? (session.resumeTurn?.({ ...resumeInput, messageId: resumeMessage.messageId }) ??

@@ -238,7 +238,6 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   email_attachment: tool(["Read", "Reading", "Read", "an email attachment"], "connectors"),
   email_refresh: tool(["Refresh", "Refreshing", "Refreshed", "email inbox"], "connectors"),
   notify_voice: tool(["Notify", "Notifying", "Notified", "voice assistant"], "thread-update"),
-  t3_goal: tool(["Update", "Updating", "Updated", "thread goal"], "thread-update"),
   tool_search: tool(["Search", "Searching", "Searched", "available tools"], "capabilities"),
   t3_feedback: tool(["Send", "Sending", "Sent", "feedback"], "thread-update"),
   create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),

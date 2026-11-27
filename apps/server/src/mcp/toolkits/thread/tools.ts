@@ -146,18 +146,6 @@ const PendingRequestTool = Tool.make("t3_pending_request", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
-const GoalTool = Tool.make("t3_goal", {
-  ...commandTool,
-  description:
-    "Report a thread's goal outcome. The review that runs after each goal turn marks it `complete` when the goal is met; the agent working on the goal marks it `blocked` when it cannot finish. The agent working on a goal cannot mark it complete.",
-  parameters: Schema.Struct({
-    environmentId: OrchestratorMcpEnvironmentTarget,
-    threadId: Schema.optional(ThreadId),
-    action: Schema.Literals(["complete", "blocked"]),
-  }),
-  success: OrchestrationV2DispatchCommandResult,
-});
-
 const threadConfiguration = Schema.Struct({
   threadId: ThreadId,
   modelSelection: ModelSelection,
@@ -275,7 +263,6 @@ const SubmitOutputTool = Tool.make("t3_submit_output", {
 export const ThreadToolkit = Toolkit.make(
   NotifyVoiceTool,
   ScheduledTaskRunTool,
-  GoalTool,
   ThreadSearchTool,
   ThreadConfigureTool,
   ThreadTransferTool,

@@ -112,7 +112,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
-  OrchestrationV2Goal,
+  OrchestrationV2ProviderGoal,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
   type OrchestrationV2PendingBackgroundTask,
@@ -2811,9 +2811,9 @@ const CLAUDE_GOAL_SET_PREFIX = "Goal set: ";
 const CLAUDE_GOAL_ACTIVE = /^Goal active: ([\s\S]+?) \((?:not yet evaluated|(\d+) turns?)\)/u;
 
 function nextClaudeGoal(
-  current: OrchestrationV2Goal | null,
+  current: OrchestrationV2ProviderGoal | null,
   message: SDKMessage,
-): OrchestrationV2Goal | null | undefined {
+): OrchestrationV2ProviderGoal | null | undefined {
   // The CLI drops a goal on a context-limit, auth, or billing failure and reports it only here.
   if (
     message.type === "system" &&
@@ -2877,7 +2877,7 @@ function isClaudeGoalAcknowledgement(message: SDKMessage): boolean {
   return text.startsWith(CLAUDE_GOAL_SET_PREFIX) || text.startsWith("Goal cleared: ");
 }
 
-const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2Goal));
+const providerGoalsEqual = Schema.toEquivalence(Schema.NullOr(OrchestrationV2ProviderGoal));
 
 function normalizeClaudeResultText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -6317,7 +6317,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const lastProviderThreadByNativeThread = yield* Ref.make(
           new Map<string, OrchestrationV2ProviderThread>(),
         );
-        const goalsByNativeThread = new Map<string, OrchestrationV2Goal | null>();
+        const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
         // The title T3 last applied to each native session, so a turn renames it only when the
         // thread title changed. A native `/rename` T3 never applied survives later turns.
         const appliedSessionTitles = new Map<string, string>();
