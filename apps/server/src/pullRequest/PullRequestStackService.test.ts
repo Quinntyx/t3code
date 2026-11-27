@@ -151,6 +151,8 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
 }) {
   const summaries = new Map(input.summaries.map((entry) => [entry.number, entry]));
   const summaryReads: number[] = [];
+  const nativeStackSupportReads: number[] = [];
+  const nativeStackReads: number[] = [];
   const retargets: Array<{ readonly number: number; readonly baseBranch: string }> = [];
   const merges: number[] = [];
   const mergeExpectedHeads: Array<{
@@ -183,8 +185,15 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
               const headSha = yield* input.resolveHeadSha(entry);
               return headSha === undefined ? entry : { ...entry, headSha };
             }),
-          supportsNativeStacks: () => Effect.succeed(input.supportsNativeStacks ?? false),
-          stack: () => input.nativeStack ?? Effect.succeed(null),
+          supportsNativeStacks: (ref) =>
+            Effect.sync(() => {
+              nativeStackSupportReads.push(ref.number);
+              return input.supportsNativeStacks ?? false;
+            }),
+          stack: (ref) =>
+            Effect.sync(() => {
+              nativeStackReads.push(ref.number);
+            }).pipe(Effect.andThen(input.nativeStack ?? Effect.succeed(null))),
           changeBaseBranch: (ref) =>
             found(ref.number).pipe(
               Effect.map((entry) => {
@@ -264,6 +273,8 @@ const makeService = Effect.fn("makeStackService")(function* (input: {
   return {
     service,
     summaryReads,
+    nativeStackSupportReads,
+    nativeStackReads,
     retargets,
     merges,
     mergeExpectedHeads,
@@ -322,6 +333,43 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
   });
 
   describe("after a merge", () => {
+    it.effect("leaves a multi-repo project's task folders untouched", () =>
+      Effect.gen(function* () {
+        const { root, worktrees } = yield* makeRepository;
+        const harness = yield* makeService({
+          root,
+          trackedFolders: [{ id: "repo-a", name: "a", path: `${root}/a` }],
+          threads: [
+            thread("b", {
+              branch: "b",
+              baseBranch: "a",
+              worktreePath: worktrees.b,
+              pullRequests: [link(2, { head: "b", base: "a" })],
+            }),
+          ],
+          summaries: [summary(2, "b", "a")],
+        });
+
+        const report = yield* harness.service.afterMerge({
+          projectId: PROJECT_ID,
+          repository: REPOSITORY,
+          number: 1,
+          mergedAt: "2026-11-02T00:00:00.000Z",
+          headBranch: "a",
+          baseBranch: "main",
+          restackDependents: false,
+        });
+
+        assert.deepStrictEqual(report, { retargeted: [2], failed: [], restacks: [] });
+        const writtenBase = yield* git(worktrees.b, [
+          "config",
+          "--get",
+          "branch.b.t3-merge-base",
+        ]).pipe(Effect.match({ onFailure: () => null, onSuccess: (value) => value }));
+        assert.equal(writtenBase, null);
+      }),
+    );
+
     it.effect(
       "retargets only open, linked, host-unstacked pull requests based on the merged branch",
       () =>
@@ -736,6 +784,58 @@ it.layer(layerTest)("PullRequestStackService", (it) => {
           .pipe(Effect.flip);
         assert.include(multiRepoErr.message, "not supported for multi-repo projects");
         assert.deepStrictEqual(multiRepo.merges, []);
+        assert.deepStrictEqual(multiRepo.summaryReads, []);
+
+        // Neither native-stack path reaches the host either: no summary, stack, or merge call.
+        const multiRepoNative = yield* makeService({
+          root,
+          trackedFolders: [{ id: "repo-a", name: "a", path: `${root}/a` }],
+          threads: [],
+          summaries: [summary(2, "b", "a", "open", { headSha: "22222222" })],
+          supportsNativeStacks: true,
+          nativeStack: Effect.succeed({
+            id: "stack-9",
+            number: 9,
+            url: "https://github.com/acme/app/stacks/9",
+            base: "main",
+            layers: [{ number: 2, state: "open", headBranch: "b", headSha: "22222222" }],
+          }),
+        });
+        const multiRepoNativeErr = yield* multiRepoNative.service
+          .mergeStack({ projectId: PROJECT_ID, repository: REPOSITORY, number: 2 })
+          .pipe(Effect.flip);
+        assert.include(multiRepoNativeErr.message, "not supported for multi-repo projects");
+        assert.deepStrictEqual(multiRepoNative.summaryReads, []);
+        assert.deepStrictEqual(multiRepoNative.nativeStackSupportReads, []);
+        assert.deepStrictEqual(multiRepoNative.nativeStackReads, []);
+        assert.deepStrictEqual(multiRepoNative.nativeStackMerges, []);
+
+        const multiRepoStacked = yield* makeService({
+          root,
+          trackedFolders: [{ id: "repo-a", name: "a", path: `${root}/a` }],
+          threads: [],
+          summaries: [
+            summary(2, "b", "a", "open", {
+              headSha: "22222222",
+              stack: { number: 9, position: 1, size: 2, base: "main" },
+            }),
+          ],
+          supportsNativeStacks: false,
+          nativeStack: Effect.succeed({
+            id: "stack-9",
+            number: 9,
+            url: "https://source.test/stacks/9",
+            base: "main",
+            layers: [{ number: 2, state: "open", headBranch: "b", headSha: "22222222" }],
+          }),
+        });
+        const multiRepoStackedErr = yield* multiRepoStacked.service
+          .mergeStack({ projectId: PROJECT_ID, repository: REPOSITORY, number: 2 })
+          .pipe(Effect.flip);
+        assert.include(multiRepoStackedErr.message, "not supported for multi-repo projects");
+        assert.deepStrictEqual(multiRepoStacked.summaryReads, []);
+        assert.deepStrictEqual(multiRepoStacked.nativeStackReads, []);
+        assert.deepStrictEqual(multiRepoStacked.merges, []);
       }),
     );
 

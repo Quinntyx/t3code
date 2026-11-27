@@ -98,6 +98,12 @@ const make = Effect.gen(function* () {
             projection.subagents.some((task) =>
               ["idle", "pending", "running", "waiting"].includes(task.status),
             ) ||
+            (projection.thread.threadWatches?.length ?? 0) > 0 ||
+            (projection.thread.awaitedScheduledTaskIds?.length ?? 0) > 0 ||
+            (projection.thread.pullRequests ?? []).some(
+              (pullRequest) =>
+                pullRequest.watch !== undefined && pullRequest.source !== "stack-dismissed",
+            ) ||
             projection.turnItems.some(
               (item) =>
                 item.status === "running" || item.status === "pending" || item.status === "waiting",

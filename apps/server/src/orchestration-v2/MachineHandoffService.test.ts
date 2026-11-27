@@ -15,6 +15,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
+  RunId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ThreadProjection,
@@ -152,6 +154,55 @@ it.effect("refuses waiting items and background work even when the provider is i
             streaming: false,
           },
         ],
+      },
+      {
+        ...base,
+        thread: {
+          ...base.thread,
+          threadWatches: [
+            {
+              threadId: ThreadId.make("watched-child"),
+              runId: RunId.make("run-watched"),
+              startedAt: "2026-10-01T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      {
+        ...base,
+        thread: {
+          ...base.thread,
+          awaitedScheduledTaskIds: [ScheduledTaskId.make("scheduled-follow-up")],
+        },
+      },
+      {
+        ...base,
+        thread: {
+          ...base.thread,
+          pullRequests: [
+            {
+              host: "github.com",
+              repository: "acme/app",
+              number: 1,
+              url: "https://github.com/acme/app/pull/1",
+              source: "agent",
+              linkedAt: "2026-10-01T00:00:00.000Z",
+              snapshot: null,
+              stack: null,
+              watch: {
+                startedAt: "2026-10-01T00:00:00.000Z",
+                headSha: "1111111",
+                failedChecks: [],
+                passedChecks: [],
+                passed: false,
+                remarksThrough: "2026-10-01T00:00:00.000Z",
+                remarkIds: [],
+                conflicting: false,
+                wakes: 0,
+              },
+            },
+          ],
+        },
       },
     ];
     for (const live of cases) {

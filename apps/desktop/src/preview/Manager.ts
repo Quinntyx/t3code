@@ -141,6 +141,8 @@ const CAPTURE_PAGE_RETRY_ATTEMPTS = 3;
 const CAPTURE_PAGE_RETRY_DELAY_MS = 120;
 const CAPTURE_PAGE_ATTEMPT_TIMEOUT_MS = 1_000;
 const BUSY_PAGE_PROBE_MS = 1_000;
+// A claimed form replay waits for its webview no longer than this before the listener is dropped.
+const FORM_REPLAY_CLAIM_TIMEOUT_MS = 5_000;
 const PICTURE_IN_PICTURE_INITIAL_WIDTH = 480;
 const PICTURE_IN_PICTURE_INITIAL_HEIGHT = 320;
 const PICTURE_IN_PICTURE_MIN_WIDTH = 240;
@@ -2149,18 +2151,25 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   // Called from will-attach-webview so the new tab POSTs instead of loading its src as a GET.
   const claimFormReplay = (params: Record<string, string>): void => {
     if (!params.src || !params.partition) return;
-    const replay = formReplays.claim(
-      params.src,
-      electronSession.fromPartition(params.partition),
-      runSync(currentMillis),
-    );
+    const expectedSession = electronSession.fromPartition(params.partition);
+    const replay = formReplays.claim(params.src, expectedSession, runSync(currentMillis));
     if (!replay) return;
     delete params.src;
-    // Electron creates the guest synchronously after will-attach-webview returns.
-    app.once("web-contents-created", (_event, guest) => {
+    // Electron creates the guest synchronously after will-attach-webview returns, so the replay
+    // belongs to that guest only: another partition's webview must not POST into this session.
+    const onCreated = (_event: Electron.Event, guest: Electron.WebContents) => {
+      if (guest.getType() !== "webview" || guest.session !== expectedSession) return;
+      app.off("web-contents-created", onCreated);
       guestFormReplays.set(guest.id, replay);
       guest.once("destroyed", () => guestFormReplays.delete(guest.id));
-    });
+    };
+    app.on("web-contents-created", onCreated);
+    // The guest arrives synchronously after this returns; a listener that never matched is dropped.
+    runFork(
+      Effect.sleep(FORM_REPLAY_CLAIM_TIMEOUT_MS).pipe(
+        Effect.andThen(Effect.sync(() => app.off("web-contents-created", onCreated))),
+      ),
+    );
   };
 
   /**

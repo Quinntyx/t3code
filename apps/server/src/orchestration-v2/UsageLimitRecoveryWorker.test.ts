@@ -617,6 +617,33 @@ const selected = (
     activePullRequestThread,
   }).map((candidate) => candidate.id);
 
+it("ignores consumption_cap failures and threads with an active consumptionCapHit", () => {
+  const now = DateTime.makeUnsafe("2026-09-01T12:00:00.000Z");
+  const resetAt = DateTime.formatIso(DateTime.add(now, { hours: 1 }));
+  assert.isNull(
+    UsageLimitRecoveryWorker.limitRecoveryCommand(
+      {
+        ...waitingThread(resetAt),
+        lastErrorCode: "consumption_cap",
+      },
+      true,
+      DateTime.toEpochMillis(now),
+      true,
+    ),
+  );
+  assert.isNull(
+    UsageLimitRecoveryWorker.limitRecoveryCommand(
+      {
+        ...waitingThread(resetAt),
+        consumptionCapHit: { at: DateTime.formatIso(now), reason: "Spend cap reached." },
+      },
+      true,
+      DateTime.toEpochMillis(now),
+      true,
+    ),
+  );
+});
+
 it("resumes every limited thread when pull requests do not come first", () => {
   assert.deepEqual(
     selected(limitedThreads, false, false),

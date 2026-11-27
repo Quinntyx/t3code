@@ -26,6 +26,7 @@ import {
   paceOf,
   paceRemainingPercent,
   resolveInstanceHubRoutes,
+  resolveUsageLimitResetAt,
   summarizeProviderLimits,
   usageLimitSourceResetAt,
   usesChatGptSharing,
@@ -2354,5 +2355,56 @@ describe("hub routing and pool resets", () => {
     expect(usageLimitSourceResetAt([allSpentHub], claudeHubProvider, now, "claude-opus-4-6")).toBe(
       "2026-09-03T14:00:00.000Z",
     );
+
+    // resolveUsageLimitResetAt never leaks local CLI resets onto hub-routed instances.
+    const claudeHubWithLocalSpent: ServerProvider = {
+      ...claudeHubProvider,
+      usageLimits: { checkedAt, windows: [spentWindow] },
+    };
+    expect(
+      resolveUsageLimitResetAt([mixedHub], claudeHubWithLocalSpent, now, "claude-opus-4-6"),
+    ).toBeNull();
+    expect(
+      resolveUsageLimitResetAt(
+        [{ ...allSpentHub, error: "hub unreachable" }],
+        claudeHubWithLocalSpent,
+        now,
+        "claude-opus-4-6",
+      ),
+    ).toBeNull();
+
+    // collectProviderUsageLimits respects ownerDriver on Pi OpenCode Go and routes hub accounts when model is null.
+    const piDriver = ProviderDriverKind.make("pi");
+    const opencodeDriver = ProviderDriverKind.make("opencode");
+    const piOpenCode: ServerProvider = {
+      ...claudeHubProvider,
+      instanceId: ProviderInstanceId.make("pi-go"),
+      driver: piDriver,
+      auth: { status: "authenticated" },
+      usageLimits: {
+        checkedAt,
+        ownerDriver: opencodeDriver,
+        windows: [openWindow],
+      },
+      usageRoutes: [{ driver: claude, origin: "http://127.0.0.1:8317" }],
+    };
+    const opencodeReport = collectProviderUsageLimits(
+      piOpenCode.instanceId,
+      [piOpenCode],
+      [mixedHub],
+      now,
+      "opencode-go/glm-5",
+    );
+    expect(opencodeReport?.accounts).toHaveLength(1);
+    expect(opencodeReport?.accounts[0]?.driver).toBe(opencodeDriver);
+
+    const nullModelReport = collectProviderUsageLimits(
+      piOpenCode.instanceId,
+      [piOpenCode],
+      [mixedHub],
+      now,
+      null,
+    );
+    expect(nullModelReport?.accounts.some((account) => account.driver === claude)).toBe(true);
   });
 });

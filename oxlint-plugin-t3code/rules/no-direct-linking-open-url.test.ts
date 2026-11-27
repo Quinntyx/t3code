@@ -85,4 +85,32 @@ describe("t3code/no-direct-linking-open-url", () => {
     void open("https://example.com");
   `,
   );
+
+  rule.invalid(
+    "reports Linking.openURL through a react-native namespace import",
+    `
+    import * as RN from "react-native";
+
+    void RN.Linking.openURL("https://example.com");
+  `,
+  );
+
+  rule.invalid(
+    "reports an openURL aliased from Linking.openURL",
+    `
+    import { Linking } from "react-native";
+
+    const open = Linking.openURL;
+    void open("https://example.com");
+  `,
+  );
+
+  rule.valid(
+    "allows a react-native namespace's other members",
+    `
+    import * as RN from "react-native";
+
+    void RN.Text;
+  `,
+  );
 });

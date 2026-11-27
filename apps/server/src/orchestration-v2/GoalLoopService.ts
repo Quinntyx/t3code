@@ -163,7 +163,7 @@ export const make = Effect.gen(function* () {
   });
 
   const continueGoal = Effect.fn("GoalLoopService.continueGoal")(
-    function* (threadId: ThreadId, options?: { readonly requireCompletedLatestRun?: boolean }) {
+    function* (threadId: ThreadId) {
       const records = yield* projections.getThreadRecords(
         threadId,
         ["runs", "runtimeRequests", "turnItems", "messages", "providerThreads"],
@@ -194,7 +194,6 @@ export const make = Effect.gen(function* () {
       }
       const latest = records.runs.at(-1);
       if (latest === undefined) return;
-      if (options?.requireCompletedLatestRun === true && latest.status !== "completed") return;
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         // One continuation per finished turn, even across duplicate events.
@@ -208,7 +207,7 @@ export const make = Effect.gen(function* () {
         dispatchMode: { type: "queue_after_active" },
       });
     },
-    (effect, threadId, _options?: { readonly requireCompletedLatestRun?: boolean }) =>
+    (effect, threadId) =>
       effect.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("goal continuation skipped", { threadId, cause }),
@@ -276,7 +275,6 @@ export const make = Effect.gen(function* () {
   );
 
   const start = Effect.fn("GoalLoopService.start")(function* () {
-    const lastGoalStatus = new Map<ThreadId, string | null>();
     return yield* forkParkedFiber(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) => {
         if (event.type === "run.updated") {
@@ -322,17 +320,14 @@ export const make = Effect.gen(function* () {
             ),
           );
         }
-        // A goal set or resumed on an idle thread starts its first turn here, while unrelated
-        // metadata edits (pinning, renaming, cap/limit updates) leave stopped/active threads alone.
-        if (event.type === "thread.metadata-updated") {
-          const previous = lastGoalStatus.get(event.threadId);
-          const next = event.payload.goal?.status ?? null;
-          lastGoalStatus.set(event.threadId, next);
-          if (next === "active" && previous !== "active") {
-            return continueGoal(event.threadId, {
-              requireCompletedLatestRun: previous !== "paused",
-            });
-          }
+        // Only an explicit goal activation/resume transitions an idle thread into a new turn;
+        // unrelated metadata edits (pinning, renaming, cap/limit updates) leave threads alone.
+        if (
+          event.type === "thread.metadata-updated" &&
+          event.goalActivated === true &&
+          event.payload.goal?.status === "active"
+        ) {
+          return continueGoal(event.threadId);
         }
         return Effect.void;
       }),

@@ -10,12 +10,7 @@ import {
   type ServerProviderUsageWindow,
 } from "@t3tools/contracts";
 import { waitingOnAgents } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import {
-  resolveInstanceHubRoutes,
-  usageLimitResetAt,
-  usageLimitSourceResetAt,
-  usageSourcesResetAt,
-} from "@t3tools/shared/usageLimits";
+import { resolveUsageLimitResetAt } from "@t3tools/shared/usageLimits";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -54,6 +49,8 @@ export function limitRecoveryCommand(
   if (
     thread.status !== "failed" ||
     thread.lastErrorClass !== "usage_limit" ||
+    thread.lastErrorCode === "consumption_cap" ||
+    thread.consumptionCapHit != null ||
     !thread.latestRunId ||
     !thread.usageLimitResetAt ||
     thread.archivedAt !== null ||
@@ -287,13 +284,7 @@ const makeSweep = Effect.gen(function* () {
           if (instance === undefined) return;
           const snapshot = yield* instance.snapshot.getSnapshot;
           const model = run.modelSelection.model;
-          const hubRouted = resolveInstanceHubRoutes(snapshot, sources, model).hubs.length > 0;
-          const localReset = () =>
-            usageLimitResetAt(snapshot, nowMs, model) ??
-            usageSourcesResetAt(snapshot, nowMs, model);
-          const resetAt = hubRouted
-            ? (usageLimitSourceResetAt(sources, snapshot, nowMs, model) ?? localReset())
-            : (localReset() ?? usageLimitSourceResetAt(sources, snapshot, nowMs, model));
+          const resetAt = resolveUsageLimitResetAt(sources, snapshot, nowMs, model);
           if (resetAt === null) return;
           yield* eventSink.writeWithEffects({
             fillUsageLimitResetAtOnly: true,
@@ -342,18 +333,24 @@ const makeSweep = Effect.gen(function* () {
         ? []
         : [{ hasLinkedPullRequest: thread.hasLinkedPullRequest, thread, command }];
     });
+    const armCommands = ready.filter((entry) => entry.command.type === "thread.metadata.update");
+    const resumeCommands = ready.filter((entry) => entry.command.type !== "thread.metadata.update");
     const prioritizePullRequests =
       preferences.autoResumeLimitedThreads && preferences.autoResumePullRequestThreadsFirst;
     const activePullRequestThread =
       prioritizePullRequests &&
-      ready.length > 0 &&
-      ready.every((entry) => !entry.hasLinkedPullRequest)
+      resumeCommands.length > 0 &&
+      resumeCommands.every((entry) => !entry.hasLinkedPullRequest)
         ? yield* projections.hasActivePullRequestThread()
         : false;
-    const selected = selectLimitRecoveryCandidates(ready, {
-      prioritizePullRequests,
-      activePullRequestThread,
-    });
+    // Arming/snoozing never consumes provider allowance, so PR-first priority gates only resumes.
+    const selected = [
+      ...armCommands,
+      ...selectLimitRecoveryCandidates(resumeCommands, {
+        prioritizePullRequests,
+        activePullRequestThread,
+      }),
+    ];
     for (const { thread, command } of selected) {
       yield* Effect.gen(function* () {
         if (command.type === "thread.metadata.update" && command.limitRecovery != null) {

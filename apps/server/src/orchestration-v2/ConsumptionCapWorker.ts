@@ -7,8 +7,9 @@ import {
 } from "@t3tools/contracts";
 import {
   collectLimitPools,
+  matchRoutedHubAccount,
   resolveInstanceHubRoutes,
-  usageOrigin,
+  usageWindowLimitsModel,
 } from "@t3tools/shared/usageLimits";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,7 +20,9 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import {
   type ConsumptionCapModelUsage,
+  type ConsumptionCapWindow,
   capModel,
+  capModelKey,
   consumptionCapHitMatches,
   evaluateConsumptionCap,
 } from "../usage/consumptionCap.ts";
@@ -75,114 +78,107 @@ const makeSweep = Effect.gen(function* () {
     nowMs: number,
   ) {
     const currentSources = usageSources ? yield* usageSources.current : [];
-    const windowsByInstance = new Map<
-      string,
-      ReadonlyArray<{
-        id: string;
-        kind: "session" | "weekly" | "monthly" | "other";
-        label: string;
-        usedPercent: number;
-        resetsAt: string | null;
-      }>
-    >();
+    const windowsByModel = new Map<string, ReadonlyArray<ConsumptionCapWindow>>();
     for (const [instanceId, models] of targets) {
       const instance = yield* instances.getInstance(instanceId);
       const snapshot = instance ? yield* instance.snapshot.getSnapshot : undefined;
-      const windowsById = new Map<
-        string,
-        {
-          id: string;
-          kind: "session" | "weekly" | "monthly" | "other";
-          label: string;
-          usedPercent: number;
-          resetsAt: string | null;
+      const modelList = models.size > 0 ? [...models] : [null];
+      for (const model of modelList) {
+        const key = capModelKey(instanceId, model);
+        if (!snapshot) {
+          windowsByModel.set(key, []);
+          continue;
         }
-      >();
-      const pushWindow = (window: {
-        id: string;
-        kind: "session" | "weekly" | "monthly" | "other";
-        label: string;
-        usedPercent: number;
-        resetsAt: string | null;
-      }) => {
-        if (!windowsById.has(window.id)) windowsById.set(window.id, window);
-      };
-      if (snapshot?.usageLimits && !snapshot.usageLimits.unavailable) {
-        for (const window of snapshot.usageLimits.windows) {
-          pushWindow({
-            id: window.id,
-            kind: window.kind,
-            label: window.label,
-            usedPercent: window.usedPercent,
-            resetsAt: window.resetsAt ?? null,
-          });
-        }
-      }
-      for (const source of snapshot?.usageSources ?? []) {
-        if (source.limits.unavailable) continue;
-        for (const window of source.limits.windows) {
-          pushWindow({
-            id: `${source.id}:${window.id}`,
-            kind: window.kind,
-            label: window.label,
-            usedPercent: window.usedPercent,
-            resetsAt: window.resetsAt ?? null,
-          });
-        }
-      }
-      if (snapshot && currentSources.length > 0) {
-        const modelList = models.size > 0 ? [...models] : [null];
-        for (const model of modelList) {
-          const { hubs, driversByOrigin } = resolveInstanceHubRoutes(
-            snapshot,
-            currentSources,
-            model,
-          );
-          for (const hub of hubs) {
-            const rawOrigin = hub.origin ?? hub.endpoint;
-            const hubOrigin = rawOrigin ? usageOrigin(rawOrigin) : null;
-            const allowedDrivers =
-              (hubOrigin ? driversByOrigin.get(hubOrigin) : undefined) ??
-              new Set([snapshot.driver]);
-            const hubAccounts = hub.accounts.filter(
-              (account) => !account.usageLimits.unavailable && allowedDrivers.has(account.driver),
-            );
-            const pools = collectLimitPools(
-              hubAccounts.map((account) => ({
-                key: `${hub.id}:${account.id}`,
-                driver: account.driver,
-                displayName: null,
-                email: account.email,
-                workspaceId: account.workspaceId,
-                plan: account.plan,
-                accentColor: undefined,
-                environments: [],
-                sourceLabel: hub.label,
-                redeem: null,
-                limits: account.usageLimits,
-              })),
-              nowMs,
-            );
-            for (const pool of pools) {
-              for (const window of pool.windows) {
-                const nextReset = window.resets.find((reset) => reset.at > nowMs);
-                pushWindow({
-                  id: `${hub.id}:${pool.driver}:${window.id}`,
-                  kind: window.kind,
-                  label: window.label,
-                  usedPercent: Math.max(0, Math.min(100, 100 - window.remainingPercent)),
-                  resetsAt: nextReset
-                    ? DateTime.formatIso(DateTime.makeUnsafe(nextReset.at))
-                    : null,
-                });
+        const windowsById = new Map<string, ConsumptionCapWindow>();
+        const pushWindow = (window: ConsumptionCapWindow) => {
+          if (!windowsById.has(window.id)) windowsById.set(window.id, window);
+        };
+        const route = resolveInstanceHubRoutes(snapshot, currentSources, model);
+        if (route.origins.length > 0) {
+          // Hub-routed models spend only the accounts that hub routes for this model;
+          // never mix in unrelated local CLI logins or direct usageSources.
+          const healthyHubs = route.hubs.filter((hub) => !hub.error);
+          if (healthyHubs.length > 0) {
+            const matchesModel = matchRoutedHubAccount(route, healthyHubs, snapshot.driver, model);
+            for (const hub of healthyHubs) {
+              const hubAccounts = hub.accounts.filter(
+                (account) => !account.usageLimits.unavailable && matchesModel(account, hub),
+              );
+              const pools = collectLimitPools(
+                hubAccounts.map((account) => ({
+                  key: `${hub.id}:${account.id}`,
+                  driver: account.driver,
+                  displayName: null,
+                  email: account.email,
+                  workspaceId: account.workspaceId,
+                  plan: account.plan,
+                  accentColor: undefined,
+                  environments: [],
+                  sourceLabel: hub.label,
+                  redeem: null,
+                  limits: account.usageLimits,
+                })),
+                nowMs,
+              );
+              for (const pool of pools) {
+                for (const window of pool.windows) {
+                  if (!usageWindowLimitsModel(pool.driver, window, model)) continue;
+                  const nextReset = window.resets.find((reset) => reset.at > nowMs);
+                  pushWindow({
+                    id: `${hub.id}:${pool.driver}:${window.id}`,
+                    kind: window.kind,
+                    label: window.label,
+                    usedPercent: Math.max(0, Math.min(100, 100 - window.remainingPercent)),
+                    resetsAt: nextReset
+                      ? DateTime.formatIso(DateTime.makeUnsafe(nextReset.at))
+                      : null,
+                  });
+                }
               }
             }
           }
+        } else {
+          // Direct models read only the matching local usageLimits or native usageSources.
+          const ownDriver = snapshot.usageLimits?.ownerDriver ?? snapshot.driver;
+          if (
+            snapshot.usageLimits &&
+            !snapshot.usageLimits.unavailable &&
+            ownDriver === route.driver
+          ) {
+            for (const window of snapshot.usageLimits.windows) {
+              if (!usageWindowLimitsModel(ownDriver, window, model)) continue;
+              pushWindow({
+                id: window.id,
+                kind: window.kind,
+                label: window.label,
+                usedPercent: window.usedPercent,
+                resetsAt: window.resetsAt ?? null,
+              });
+            }
+          }
+          const modelProvider = model?.split(/[/:]/)[0];
+          const nativeSources =
+            snapshot.driver === "pi" && modelProvider !== "openai-codex"
+              ? []
+              : (snapshot.usageSources ?? []);
+          for (const source of nativeSources) {
+            if (source.driver !== route.driver || source.limits.unavailable) continue;
+            for (const window of source.limits.windows) {
+              if (!usageWindowLimitsModel(source.driver, window, model)) continue;
+              pushWindow({
+                id: `${source.id}:${window.id}`,
+                kind: window.kind,
+                label: window.label,
+                usedPercent: window.usedPercent,
+                resetsAt: window.resetsAt ?? null,
+              });
+            }
+          }
         }
+        windowsByModel.set(key, [...windowsById.values()]);
       }
-      windowsByInstance.set(instanceId, [...windowsById.values()]);
     }
-    return windowsByInstance;
+    return windowsByModel;
   });
 
   return Effect.fn("ConsumptionCapWorker.sweep")(function* () {
@@ -202,18 +198,19 @@ const makeSweep = Effect.gen(function* () {
 
         const threadUsage = yield* usage.read(thread.id);
         const usageModels = threadUsage.models.map(capModel);
-        const windowsByInstance = yield* readWindows(
-          quotaTargets(
-            cap,
-            usageModels,
-            thread.providerInstanceId,
-            thread.modelSelection?.model ?? null,
-          ),
+        const threadModel = thread.modelSelection?.model ?? null;
+        const windowsByModel = yield* readWindows(
+          quotaTargets(cap, usageModels, thread.providerInstanceId, threadModel),
           nowMs,
         );
         const evaluation = evaluateConsumptionCap(
           cap,
-          { models: usageModels, windowsByInstance },
+          {
+            models: usageModels,
+            windowsByInstance: new Map(),
+            windowsByModel,
+            activeTarget: { providerInstanceId: thread.providerInstanceId, model: threadModel },
+          },
           nowMs,
         );
 

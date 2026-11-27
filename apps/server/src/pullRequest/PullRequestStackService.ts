@@ -539,7 +539,8 @@ export const make = Effect.gen(function* () {
                 baseBranch: merged.baseBranch,
               });
             }
-            if (cwd !== null) {
+            // A multi-repo project has no stack root, and a task folder there is not a checkout.
+            if (root !== null && cwd !== null) {
               yield* git.writeBranchBase({ cwd, branch, baseBranch: merged.baseBranch });
             }
           }
@@ -678,6 +679,13 @@ export const make = Effect.gen(function* () {
       repository: input.repository,
       ...(input.host === undefined ? {} : { host: input.host }),
     };
+    // Reject before any forge read or mutation; a multi-repo project has no single stack root.
+    const projectRoot = yield* resolveProjectRoot(input.projectId).pipe(
+      Effect.mapError((cause) => stop("The project could not be read.", cause)),
+    );
+    if (projectRoot.kind === "multi_repo") {
+      return yield* stop("Stack merge is not supported for multi-repo projects.");
+    }
     const target = yield* pullRequests.summary(
       { ...ref, number: input.number, allowStale: false },
       { bypassCache: true },
@@ -747,13 +755,16 @@ export const make = Effect.gen(function* () {
     const threads = yield* projectThreads(target.projectId).pipe(
       Effect.mapError((cause) => stop("The project's threads could not be read.", cause)),
     );
-    const projectRoot = yield* resolveProjectRoot(target.projectId).pipe(
-      Effect.mapError((cause) => stop("The project could not be read.", cause)),
-    );
-    if (projectRoot.kind === "multi_repo") {
+    const targetProjectRoot =
+      target.projectId === input.projectId
+        ? projectRoot
+        : yield* resolveProjectRoot(target.projectId).pipe(
+            Effect.mapError((cause) => stop("The project could not be read.", cause)),
+          );
+    if (targetProjectRoot.kind === "multi_repo") {
       return yield* stop("Stack merge is not supported for multi-repo projects.");
     }
-    const root = projectRoot.kind === "repo" ? projectRoot.root : null;
+    const root = targetProjectRoot.kind === "repo" ? targetProjectRoot.root : null;
     const chain: PullRequestSummary[] = [target];
     while (true) {
       const below = chain[0]!;
@@ -870,7 +881,9 @@ export const make = Effect.gen(function* () {
             ),
           );
       }
-      const ownerId = threads.find((thread) => thread.branch === next.headBranch)?.id;
+      // A worktree thread owns its branch; a shared-checkout thread only shares the name.
+      const owners = threads.filter((thread) => thread.branch === next.headBranch);
+      const ownerId = (owners.find((thread) => thread.worktreePath !== null) ?? owners[0])?.id;
       const owner =
         ownerId === undefined
           ? null

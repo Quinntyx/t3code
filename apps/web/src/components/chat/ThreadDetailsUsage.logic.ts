@@ -43,12 +43,11 @@ export function resolveThreadDetailsLimits(
   const modelProvider = model?.split(/[/:]/)[0];
   const piHubModel = provider.driver === "pi" && isPiHubModelProvider(modelProvider);
   if (hubs.length > 0) {
-    // An instance routed to a hub spends that hub's pool for the selected model.
-    const pool = hubPool(quotaDriver, model, providers, hubs, now);
-    if (pool) return pool;
-    // Do not fall back to an unrelated local usageLimits when a hub-routed model's hub is unreadable.
-    if (piHubModel) return null;
-  } else if (piHubModel) {
+    // An instance routed to a hub spends that hub's pool for the selected model; never fall back
+    // to an unrelated local CLI login when the hub pool is unreadable or empty.
+    return hubPool(quotaDriver, model, providers, hubs, now);
+  }
+  if (piHubModel) {
     // Offline or unconfigured CLIProxyAPI hub on Pi must not display unrelated local limits.
     return null;
   }

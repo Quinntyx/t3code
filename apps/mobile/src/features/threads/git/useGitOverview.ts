@@ -295,8 +295,9 @@ export function useGitOverview(props: {
       return;
     }
 
-    // Close a sheet so the thread shows the action's progress.
+    // Close a sheet or drawer so the thread shows the action's progress.
     if (presentation === "sheet") navigation.goBack();
+    else if (presentation === "drawer") onNavigate?.();
     else closeInspectorSheet?.();
     await gitActions.onRunSelectedThreadGitAction(input);
   };

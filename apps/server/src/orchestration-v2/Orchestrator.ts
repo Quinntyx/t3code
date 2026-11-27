@@ -5837,6 +5837,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.provider-switched" as const;
       }
     })();
+    const goalActivated =
+      eventType === "thread.metadata-updated" &&
+      thread.goal?.status !== "active" &&
+      updatedThread.goal?.status === "active";
     yield* emit(
       events,
       command,
@@ -5846,6 +5850,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       providerInstanceId: updatedThread.providerInstanceId,
       occurredAt: now,
       payload: updatedThread,
+      ...(goalActivated ? { goalActivated: true } : {}),
     });
     // Stop retrying leaves the mark a Stop leaves, or the next sweep would arm the run again.
     if (command.type === "thread.metadata.update" && command.stallRecovery === null) {
@@ -7937,10 +7942,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const freshContext = command.freshContext === true;
     // A result is asked of one whole turn, so a send that declares one never joins a running turn.
     // A run that continues one cut short still owes that run's result.
-    const continuedRunId =
-      command.restartContinuationOfRunId ??
-      command.usageLimitContinuationOfRunId ??
-      command.manualContinuationOfRunId;
+    const continuationSourceRunId = (
+      source: Pick<
+        typeof command,
+        | "restartContinuationOfRunId"
+        | "usageLimitContinuationOfRunId"
+        | "manualContinuationOfRunId"
+        | "stallContinuationOfRunId"
+      >,
+    ): RunId | undefined =>
+      source.restartContinuationOfRunId ??
+      source.usageLimitContinuationOfRunId ??
+      source.manualContinuationOfRunId ??
+      source.stallContinuationOfRunId;
+    const continuedRunId = continuationSourceRunId(command);
     const outputSchema =
       command.outputSchema ??
       (continuedRunId === undefined
@@ -8371,6 +8386,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerInstanceId: projection.thread.providerInstanceId,
           occurredAt: now,
           payload: { ...projection.thread, goal: nextGoal },
+          ...(nextGoal?.status === "active" ? { goalActivated: true } : {}),
         });
         projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       }

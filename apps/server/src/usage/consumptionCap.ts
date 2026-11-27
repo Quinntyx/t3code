@@ -25,6 +25,13 @@ export interface ConsumptionCapSnapshot {
   readonly models: ReadonlyArray<ConsumptionCapModelUsage>;
   /** Instances the worker read for this cap's quota conditions. */
   readonly windowsByInstance: ReadonlyMap<string, ReadonlyArray<ConsumptionCapWindow>>;
+  /** Model-scoped windows keyed by `capModelKey(instanceId, model)`. */
+  readonly windowsByModel?: ReadonlyMap<string, ReadonlyArray<ConsumptionCapWindow>>;
+  /** Active thread target used when an unscoped quota condition evaluates against `windowsByModel`. */
+  readonly activeTarget?: {
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly model: string | null;
+  } | null;
 }
 
 export interface ConsumptionCapBreach {
@@ -40,6 +47,9 @@ export interface ConsumptionCapEvaluation {
    */
   readonly known: boolean;
 }
+
+export const capModelKey = (providerInstanceId: string, model: string | null) =>
+  `${providerInstanceId}\u0000${model ?? ""}`;
 
 const modelKey = (providerInstanceId: string, model: string) =>
   `${providerInstanceId}\u0000${model}`;
@@ -105,15 +115,34 @@ export function evaluateConsumptionCap(
       continue;
     }
 
-    const instanceIds =
+    const windowLists: Array<ReadonlyArray<ConsumptionCapWindow>> =
       scope === undefined
-        ? [...snapshot.windowsByInstance.keys()]
-        : [...new Set((condition.models ?? []).map((entry) => entry.providerInstanceId as string))];
+        ? snapshot.windowsByModel !== undefined
+          ? (() => {
+              const targetKeys = new Set<string>();
+              for (const model of snapshot.models) {
+                targetKeys.add(capModelKey(model.providerInstanceId, model.model));
+              }
+              if (snapshot.activeTarget != null) {
+                targetKeys.add(
+                  capModelKey(
+                    snapshot.activeTarget.providerInstanceId,
+                    snapshot.activeTarget.model,
+                  ),
+                );
+              }
+              return [...targetKeys].map((key) => snapshot.windowsByModel!.get(key) ?? []);
+            })()
+          : [...snapshot.windowsByInstance.values()]
+        : (condition.models ?? []).map(
+            (entry) =>
+              snapshot.windowsByModel?.get(capModelKey(entry.providerInstanceId, entry.model)) ??
+              snapshot.windowsByInstance.get(entry.providerInstanceId) ??
+              [],
+          );
     let answered = false;
-    for (const instanceId of instanceIds) {
-      const matching = (snapshot.windowsByInstance.get(instanceId) ?? []).filter(
-        (candidate) => candidate.kind === condition.windowKind,
-      );
+    for (const windows of windowLists) {
+      const matching = windows.filter((candidate) => candidate.kind === condition.windowKind);
       if (matching.length === 0) continue;
       answered = true;
       for (const window of matching) {

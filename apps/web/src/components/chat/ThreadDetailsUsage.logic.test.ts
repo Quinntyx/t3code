@@ -233,6 +233,26 @@ describe("resolveThreadDetailsLimits", () => {
     expect(
       resolveThreadDetailsLimits(piId, "cliproxyapi/claude-opus-4-6", [piProvider], [], now),
     ).toBeNull();
+    // A non-Pi instance routed to an unreadable hub must not fall back to local CLI limits.
+    const claudeRouted: ServerProvider = {
+      ...claudeInstance(limitsAt(95)),
+      auth: { status: "authenticated", endpoint: "http://127.0.0.1:8317" },
+    };
+    const erroredHub = [
+      {
+        ...hub("Hub", [], "http://127.0.0.1:8317"),
+        error: "hub unavailable",
+      },
+    ];
+    expect(
+      resolveThreadDetailsLimits(
+        claudeRouted.instanceId,
+        "claude-opus-4-6",
+        [claudeRouted],
+        erroredHub,
+        now,
+      ),
+    ).toBeNull();
     // When Pi's ChatGPT usageSource matches a Codex hub account, hubPool strips unrelated OpenCode Go limits.
     const codexPi: ServerProvider = {
       ...piProvider,

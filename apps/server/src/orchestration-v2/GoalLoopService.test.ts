@@ -104,11 +104,12 @@ const completedRun = (id: string, thread = threadId): OrchestrationV2DomainEvent
     payload: run(id, "completed"),
   }) as unknown as OrchestrationV2DomainEvent;
 
-const goalUpdated = (status: string): OrchestrationV2DomainEvent =>
+const goalUpdated = (status: string, goalActivated = true): OrchestrationV2DomainEvent =>
   ({
     type: "thread.metadata-updated",
     threadId,
     payload: { goal: { objective, status } },
+    ...(goalActivated ? { goalActivated: true } : {}),
   }) as unknown as OrchestrationV2DomainEvent;
 
 /** Runs the loop over fixed events and returns the commands it dispatched. */
@@ -470,23 +471,53 @@ it.effect("continues past a link_request once the user posts a newer message", (
   }),
 );
 
-it.effect("ignores unrelated metadata updates on interrupted threads and unawaited commands", () =>
-  Effect.gen(function* () {
-    const afterInterrupt = yield* dispatchedFor({
-      events: [goalUpdated("active")],
-      runs: [run("run-1", "interrupted")],
-    });
-    assert.deepEqual(afterInterrupt, []);
+it.effect(
+  "ignores unrelated metadata updates, resumes paused/blocked goals across restarts, and ignores unawaited commands",
+  () =>
+    Effect.gen(function* () {
+      // Unrelated metadata update (pin, rename, cap clear) leaves both interrupted and completed
+      // active-goal threads alone without bypassing reviewGoal.
+      const unrelatedInterrupted = yield* dispatchedFor({
+        events: [goalUpdated("active", false)],
+        runs: [run("run-1", "interrupted")],
+      });
+      assert.deepEqual(unrelatedInterrupted, []);
 
-    const withUnawaitedCommand = yield* dispatchedFor({
-      events: [completedRun("run-1")],
-      turnItems: [{ type: "command_execution", status: "running" }],
-    });
-    assert.deepEqual(
-      withUnawaitedCommand.map((command) => command.type),
-      ["delegated_task.request"],
-    );
-  }),
+      const unrelatedCompleted = yield* dispatchedFor({
+        events: [goalUpdated("active", false)],
+        runs: [run("run-1", "completed")],
+      });
+      assert.deepEqual(unrelatedCompleted, []);
+
+      // Explicit goal activation (e.g. /goal resume after restart or from blocked) resumes even when
+      // the previous run was interrupted or failed.
+      const resumedInterrupted = yield* dispatchedFor({
+        events: [goalUpdated("active", true)],
+        runs: [run("run-1", "interrupted")],
+      });
+      assert.deepEqual(
+        resumedInterrupted.map((command) => command.type),
+        ["message.dispatch"],
+      );
+
+      const resumedFailed = yield* dispatchedFor({
+        events: [goalUpdated("active", true)],
+        runs: [run("run-1", "failed")],
+      });
+      assert.deepEqual(
+        resumedFailed.map((command) => command.type),
+        ["message.dispatch"],
+      );
+
+      const withUnawaitedCommand = yield* dispatchedFor({
+        events: [completedRun("run-1")],
+        turnItems: [{ type: "command_execution", status: "running" }],
+      });
+      assert.deepEqual(
+        withUnawaitedCommand.map((command) => command.type),
+        ["delegated_task.request"],
+      );
+    }),
 );
 
 it.effect("ignores a turn that did not complete", () =>

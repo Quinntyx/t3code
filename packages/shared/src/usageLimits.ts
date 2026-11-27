@@ -122,7 +122,7 @@ export function exhaustedUsageWindow(
   return exhaustedUsageWindows(provider, now, model)[0];
 }
 
-export function usageLimitResetAt(
+function usageLimitResetAt(
   provider: UsageLimitProvider | undefined,
   now: number,
   model?: string | null,
@@ -171,7 +171,7 @@ function quotaDriverForModel(
   return driver;
 }
 
-export function usageSourcesResetAt(
+function usageSourcesResetAt(
   provider: Pick<ServerProvider, "driver" | "usageSources"> | undefined,
   now: number,
   model?: string | null,
@@ -213,6 +213,29 @@ export function usageLimitSourceResetAt(
   const hubReset =
     healthyHubs.length === 0 ? null : hubPoolResetAt(healthyHubs, driver, model ?? null, now);
   return hubReset ?? usageSourcesResetAt(provider, now, model);
+}
+
+/**
+ * Resolves the reset timestamp for a provider's active model without leaking local CLI limits
+ * onto hub-routed instances.
+ */
+export function resolveUsageLimitResetAt(
+  sources: UsageLimitSourceSnapshots,
+  provider:
+    | Pick<ServerProvider, "driver" | "auth" | "usageLimits" | "usageSources" | "usageRoutes">
+    | undefined,
+  now: number,
+  model?: string | null,
+): string | null {
+  if (provider === undefined) return null;
+  const { driver, hubs, origins } = resolveInstanceHubRoutes(provider, sources, model ?? null);
+  if (origins.length > 0) {
+    const healthyHubs = hubs.filter((source) => !source.error);
+    return healthyHubs.length === 0
+      ? null
+      : hubPoolResetAt(healthyHubs, driver, model ?? null, now);
+  }
+  return usageLimitResetAt(provider, now, model) ?? usageSourcesResetAt(provider, now, model);
 }
 
 export function resolveNewThreadModelSelection(input: {
@@ -1184,14 +1207,23 @@ export function withUsageLimitsCommands(
   sources: UsageLimitSourceSnapshots,
 ): ServerProvider[] {
   const supportedDrivers = new Set([
-    ...providersWithLimits(providers).map((provider) => provider.driver),
+    ...providersWithLimits(providers).flatMap((provider) => [
+      provider.driver,
+      ...(provider.usageLimits?.ownerDriver ? [provider.usageLimits.ownerDriver] : []),
+      ...(provider.usageSources ?? []).map((source) => source.driver),
+    ]),
     ...sources.flatMap((source) => source.accounts.map((account) => account.driver)),
   ]);
   const unreadableSource = sources.some(
     (source) => source.error !== undefined && source.accounts.length === 0,
   );
   return providers.map((provider) => {
-    if (!unreadableSource && !supportedDrivers.has(provider.driver)) return provider;
+    const providerRouteSupported =
+      provider.enabled &&
+      (provider.usageRoutes ?? []).some((route) => supportedDrivers.has(route.driver));
+    if (!unreadableSource && !providerRouteSupported && !supportedDrivers.has(provider.driver)) {
+      return provider;
+    }
     const commands = (items: readonly ServerProviderSlashCommand[]) => [
       ...items.filter((command) => command.name !== USAGE_LIMITS_COMMAND.name),
       USAGE_LIMITS_COMMAND,
@@ -1296,6 +1328,39 @@ export function antigravityWindowLimitsModel(
   return antigravityQuotaFamily(window.id) === antigravityQuotaFamily(base);
 }
 
+/** Whether a usage window meters the given model (ignoring unrelated Claude/Antigravity buckets). */
+export function usageWindowLimitsModel(
+  driver: ServerProvider["driver"],
+  window: Pick<ServerProviderUsageWindow, "id">,
+  model: string | null,
+): boolean {
+  if (driver === "claudeAgent") return claudeWindowLimitsModel(window, model);
+  if (driver === "antigravity") return antigravityWindowLimitsModel(window, model);
+  return true;
+}
+
+/** Matches hub accounts for a resolved instance route, including null-model Pi routes and v8 model slugs. */
+export function matchRoutedHubAccount(
+  route: Pick<ReturnType<typeof resolveInstanceHubRoutes>, "driver" | "driversByOrigin">,
+  hubs: UsageLimitSourceSnapshots,
+  providerDriver: ServerProvider["driver"],
+  model: string | null,
+): (account: UsageLimitSourceAccount, hub?: UsageLimitSourceSnapshots[number]) => boolean {
+  if (model == null && route.driver === providerDriver && route.driversByOrigin.size > 0) {
+    const allRoutedDrivers = new Set(
+      [...route.driversByOrigin.values()].flatMap((set) => [...set]),
+    );
+    return (account, hub) => {
+      const rawOrigin = hub ? (hub.origin ?? hub.endpoint) : undefined;
+      const origin = rawOrigin ? usageOrigin(rawOrigin) : null;
+      const allowed = origin ? route.driversByOrigin.get(origin) : undefined;
+      return (allowed ?? allRoutedDrivers).has(account.driver);
+    };
+  }
+  const byModel = hubRoutes(hubs, route.driver, model);
+  return (account) => byModel(account);
+}
+
 /** The hub accounts that serve a model: those that list it, else every account of the driver. */
 export function hubRoutes(
   sources: UsageLimitSourceSnapshots,
@@ -1368,19 +1433,17 @@ export function collectProviderUsageLimits(
   const selected = providers.find((provider) => provider.instanceId === instanceId);
   if (!selected) return null;
   // Only an instance sent to a hub is known to reach the accounts that hub routes its model to.
-  const {
-    driver: quotaDriver,
-    hubs,
-    origins,
-    directOnly,
-  } = resolveInstanceHubRoutes(selected, sources, model);
+  const route = resolveInstanceHubRoutes(selected, sources, model);
+  const { driver: quotaDriver, hubs, origins, directOnly } = route;
   const routes =
     hubs.length > 0
-      ? hubRoutes(hubs, quotaDriver, model)
+      ? matchRoutedHubAccount(route, hubs, selected.driver, model)
       : (account: UsageLimitSourceAccount) => account.driver === quotaDriver;
   const shownHubs = directOnly || origins.length > 0 ? hubs : sources;
   const drivers = new Set(
-    shownHubs.flatMap((source) => source.accounts.filter(routes).map((account) => account.driver)),
+    shownHubs.flatMap((source) =>
+      source.accounts.filter((account) => routes(account, source)).map((account) => account.driver),
+    ),
   );
   if (drivers.size === 0) drivers.add(quotaDriver);
   if (![...drivers].some((driver) => hasProviderUsageLimits(driver, providers, shownHubs))) {
@@ -1394,7 +1457,11 @@ export function collectProviderUsageLimits(
   // Behind a hub, a local login counts only when it is one of the accounts the hub routes to.
   const routedKeys =
     hubs.length > 0
-      ? new Set(hubs.flatMap((source) => source.accounts.filter(routes).map(resolveKey)))
+      ? new Set(
+          hubs.flatMap((source) =>
+            source.accounts.filter((account) => routes(account, source)).map(resolveKey),
+          ),
+        )
       : null;
   type NativeSnapshot = { provider: ServerProvider; limits: ServerProviderUsageLimits };
   const nativeByAccount = new Map<
@@ -1402,7 +1469,9 @@ export function collectProviderUsageLimits(
     { usage: NativeSnapshot; credits: NativeSnapshot | null }
   >();
   for (const provider of providersWithLimits(providers)) {
-    if (!drivers.has(provider.driver) || !provider.usageLimits) continue;
+    if (!provider.usageLimits) continue;
+    const effectiveDriver = provider.usageLimits.ownerDriver ?? provider.driver;
+    if (!drivers.has(effectiveDriver)) continue;
     const accountKey = resolveKey(nativeReport(provider));
     if (routedKeys && (accountKey === null || !routedKeys.has(accountKey))) continue;
     const snapshot = { provider, limits: provider.usageLimits };
@@ -1475,7 +1544,7 @@ export function collectProviderUsageLimits(
       : credits?.limits.resetCredits;
     accounts.push({
       id: provider.instanceId,
-      driver: provider.driver,
+      driver: limits.ownerDriver ?? provider.driver,
       label: `${provider.displayName?.trim() || String(provider.driver)} [${provider.instanceId}]`,
       ...(provider.auth.label ? { plan: provider.auth.label } : {}),
       instanceId: provider.instanceId,
@@ -1514,7 +1583,7 @@ export function collectProviderUsageLimits(
     });
   }
   for (const source of shownHubs) {
-    const matching = source.accounts.filter(routes);
+    const matching = source.accounts.filter((account) => routes(account, source));
     for (const account of matching) {
       const key = resolveKey(account);
       if (key && nativeAccountKeys.has(key)) continue;

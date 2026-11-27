@@ -553,6 +553,7 @@ it.effect.each([
   "running-delegated-snoozed",
   "running-delegated-stopped",
   "running-resume",
+  "starting-stall-resume",
 ] as const)("recovers $0 work after restart", (scenario) => {
   const status = scenario.startsWith("starting")
     ? "starting"
@@ -564,6 +565,7 @@ it.effect.each([
     status === "preparing" ||
     scenario === "starting-own-request" ||
     scenario === "starting-steered" ||
+    scenario === "starting-stall-resume" ||
     scenario === "running-delegated-capped" ||
     scenario === "running-delegated-snoozed" ||
     scenario === "running-delegated-stopped" ||
@@ -600,7 +602,15 @@ it.effect.each([
               autoResume: true,
             },
           }
-        : {}),
+        : scenario === "starting-stall-resume"
+          ? {
+              stallRecovery: {
+                runId: RunId.make("run_queued_restart_stalled"),
+                attempt: 1,
+                nextAttemptAt: "2026-11-01T19:34:00.000Z",
+              },
+            }
+          : {}),
     },
     runtimeRequests: scenario.endsWith("request")
       ? [
@@ -638,7 +648,9 @@ it.effect.each([
         providerInstanceId: ProviderInstanceId.make("codex"),
         ...(scenario === "running-resume"
           ? { usageLimitContinuationOfRunId: RunId.make("run_queued_restart_limited") }
-          : {}),
+          : scenario === "starting-stall-resume"
+            ? { stallContinuationOfRunId: RunId.make("run_queued_restart_stalled") }
+            : {}),
         ...(status === "preparing"
           ? {
               workspacePreparation: {
@@ -687,7 +699,7 @@ it.effect.each([
               id: MessageId.make("message_queued_restart"),
               ...(scenario.startsWith("running-delegated")
                 ? { createdBy: "agent", creationSource: "mcp" }
-                : scenario === "running-resume"
+                : scenario === "running-resume" || scenario === "starting-stall-resume"
                   ? { createdBy: "agent", creationSource: "server" }
                   : { createdBy: "user" }),
               ...(scenario === "starting-scheduled" ? { scheduledTaskId: "scheduled-task" } : {}),
@@ -814,6 +826,13 @@ it.effect.each([
           ? rearmed.payload.limitRecovery?.requestId
           : null,
         command.commandId,
+      );
+    }
+    if (scenario === "starting-stall-resume") {
+      const rearmed = command.events.find((event) => event.type === "thread.metadata-updated");
+      assert.isTrue(
+        rearmed?.type === "thread.metadata-updated" &&
+          rearmed.payload.stallRecovery?.nextAttemptAt !== "2026-11-01T19:34:00.000Z",
       );
     }
   }).pipe(Effect.provide(layer));

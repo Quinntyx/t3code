@@ -2347,7 +2347,6 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.tags-updated",
       "thread.visited",
       "thread.marked-unread",
-      "thread.metadata-updated",
       "thread.pull-request-synced",
       "thread.issue-synced",
       "thread.runtime-mode-updated",
@@ -2357,6 +2356,13 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.guest-share-updated",
     ]),
     payload: OrchestrationV2AppThread,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.metadata-updated"),
+    payload: OrchestrationV2AppThread,
+    /** Set when this update transitions the thread's goal into `active` so GoalLoopService can resume it. */
+    goalActivated: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,

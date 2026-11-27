@@ -384,5 +384,198 @@ describe("consumption cap sweep", () => {
       usageSources: [hubA],
     });
     expect(isolatedCommands).toEqual([]);
+
+    // Local OpenCode Go (95%) and ChatGPT usageSource (95%) on Pi must not breach a healthy
+    // hub-routed Claude thread, while a v8 openrouter hub account (95%) breaches its own model.
+    const opencode = ProviderDriverKind.make("opencode");
+    const openrouter = ProviderDriverKind.make("openrouter");
+    const piWithLocalExhausted = {
+      ...piMultiHub,
+      usageLimits: {
+        checkedAt,
+        ownerDriver: opencode,
+        windows: [
+          {
+            id: "five_hour",
+            kind: "session",
+            label: "OpenCode Go 5h",
+            usedPercent: 95,
+            resetsAt: "2099-11-04T15:00:00.000Z",
+          },
+        ],
+      },
+      usageSources: [
+        {
+          id: "chatgpt",
+          label: "ChatGPT",
+          driver: codex,
+          limits: {
+            checkedAt,
+            windows: [
+              {
+                id: "five_hour",
+                kind: "session",
+                label: "ChatGPT 5h",
+                usedPercent: 95,
+                resetsAt: "2099-11-04T15:00:00.000Z",
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as ServerProvider;
+    const hubWithV8: UsageLimitSourceSnapshot = {
+      ...hubA,
+      accounts: [
+        ...hubA.accounts,
+        {
+          id: "openrouter.json",
+          driver: openrouter,
+          models: ["z-ai/glm-5.3-flash"],
+          usageLimits: {
+            checkedAt,
+            windows: [
+              {
+                id: "five_hour",
+                kind: "session",
+                label: "OpenRouter 5h",
+                usedPercent: 95,
+                resetsAt: "2099-11-04T15:00:00.000Z",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const noLocalLeak = await runSweep({
+      candidates: [
+        {
+          ...candidate({
+            providerInstanceId: piId,
+            activeRunId: runId,
+            cap: { conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }] },
+          }),
+          thread: {
+            id: threadId,
+            providerInstanceId: piId,
+            modelSelection: { instanceId: piId, model: "cliproxyapi/claude-opus-4-6" },
+            consumptionCap: {
+              conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }],
+            },
+            consumptionCapHit: null,
+          } as unknown as OrchestrationV2AppThread,
+        },
+      ],
+      models: [],
+      snapshots: new Map([[piId, piWithLocalExhausted]]),
+      usageSources: [hubWithV8],
+    });
+    expect(noLocalLeak).toEqual([]);
+
+    const v8Breach = await runSweep({
+      candidates: [
+        {
+          ...candidate({
+            providerInstanceId: piId,
+            activeRunId: runId,
+            cap: { conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }] },
+          }),
+          thread: {
+            id: threadId,
+            providerInstanceId: piId,
+            modelSelection: { instanceId: piId, model: "cliproxyapi/z-ai/glm-5.3-flash" },
+            consumptionCap: {
+              conditions: [{ kind: "quota", windowKind: "session", atPercent: 80 }],
+            },
+            consumptionCapHit: null,
+          } as unknown as OrchestrationV2AppThread,
+        },
+      ],
+      models: [],
+      snapshots: new Map([[piId, piWithLocalExhausted]]),
+      usageSources: [hubWithV8],
+    });
+    expect(v8Breach.map((command) => command.type)).toEqual([
+      "thread.metadata.update",
+      "thread.stop",
+    ]);
+
+    // Claude model-scoped seven_day_sonnet (95%) must not breach an Opus weekly cap,
+    // and hub-routed Claude ignores saturated local CLI usageLimits.
+    const claudeId = ProviderInstanceId.make("claude-direct");
+    const claudeSnapshot = {
+      instanceId: claudeId,
+      driver: claude,
+      auth: { status: "authenticated" },
+      usageLimits: {
+        checkedAt,
+        windows: [
+          {
+            id: "seven_day",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 20,
+            resetsAt: "2099-11-10T15:00:00.000Z",
+          },
+          {
+            id: "seven_day_sonnet",
+            kind: "weekly",
+            label: "Sonnet weekly",
+            usedPercent: 95,
+            resetsAt: "2099-11-10T15:00:00.000Z",
+          },
+        ],
+      },
+    } as unknown as ServerProvider;
+    const opusNoBreach = await runSweep({
+      candidates: [
+        {
+          ...candidate({
+            providerInstanceId: claudeId,
+            activeRunId: runId,
+            cap: { conditions: [{ kind: "quota", windowKind: "weekly", atPercent: 80 }] },
+          }),
+          thread: {
+            id: threadId,
+            providerInstanceId: claudeId,
+            modelSelection: { instanceId: claudeId, model: "claude-opus-4-6" },
+            consumptionCap: {
+              conditions: [{ kind: "quota", windowKind: "weekly", atPercent: 80 }],
+            },
+            consumptionCapHit: null,
+          } as unknown as OrchestrationV2AppThread,
+        },
+      ],
+      models: [],
+      snapshots: new Map([[claudeId, claudeSnapshot]]),
+    });
+    expect(opusNoBreach).toEqual([]);
+
+    const sonnetBreach = await runSweep({
+      candidates: [
+        {
+          ...candidate({
+            providerInstanceId: claudeId,
+            activeRunId: runId,
+            cap: { conditions: [{ kind: "quota", windowKind: "weekly", atPercent: 80 }] },
+          }),
+          thread: {
+            id: threadId,
+            providerInstanceId: claudeId,
+            modelSelection: { instanceId: claudeId, model: "claude-sonnet-4-6" },
+            consumptionCap: {
+              conditions: [{ kind: "quota", windowKind: "weekly", atPercent: 80 }],
+            },
+            consumptionCapHit: null,
+          } as unknown as OrchestrationV2AppThread,
+        },
+      ],
+      models: [],
+      snapshots: new Map([[claudeId, claudeSnapshot]]),
+    });
+    expect(sonnetBreach.map((command) => command.type)).toEqual([
+      "thread.metadata.update",
+      "thread.stop",
+    ]);
   });
 });

@@ -356,8 +356,10 @@ export const layerResetFallback = Layer.effect(
         // The pool usually ran out after the last poll, so the cached accounts still show room.
         yield* sources.refresh.pipe(Effect.timeout("5 seconds"), Effect.ignore);
         const refreshed = yield* matched;
+        const healthyHubs = refreshed.hubs.filter((source) => !source.error);
+        if (healthyHubs.length === 0) return null;
         return hubPoolResetAt(
-          refreshed.hubs,
+          healthyHubs,
           refreshed.driver,
           model,
           DateTime.toEpochMillis(yield* DateTime.now),

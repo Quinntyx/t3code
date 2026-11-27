@@ -36,14 +36,22 @@ export default defineRule({
   create(context) {
     // Names this file bound to the Linking API or to an openURL function, however imported.
     const linkingNames = new Set<string>();
+    const reactNativeNamespaces = new Set<string>();
     const openUrlNames = new Set<string>();
 
     const namesLinking = (node: unknown): boolean => {
       const expression = unwrapExpression(node);
+      if (Option.isNone(expression)) return false;
+      const value = expression.value;
+      if (value.type === "Identifier") {
+        return value.name === "Linking" || linkingNames.has(value.name);
+      }
+      // `RN.Linking` from `import * as RN from "react-native"` names the same API.
       return (
-        Option.isSome(expression) &&
-        expression.value.type === "Identifier" &&
-        (expression.value.name === "Linking" || linkingNames.has(expression.value.name))
+        value.type === "MemberExpression" &&
+        value.object.type === "Identifier" &&
+        reactNativeNamespaces.has(value.object.name) &&
+        Option.getOrUndefined(getPropertyName(value.property)) === "Linking"
       );
     };
 
@@ -64,6 +72,7 @@ export default defineRule({
           // expo-linking exports the Linking API itself, as its namespace and default export.
           if (specifier.type === "ImportNamespaceSpecifier") {
             if (source === "expo-linking") linkingNames.add(specifier.local.name);
+            else reactNativeNamespaces.add(specifier.local.name);
             continue;
           }
           if (specifier.type === "ImportSpecifier") {
@@ -81,6 +90,18 @@ export default defineRule({
         }
       },
       VariableDeclarator(node) {
+        // `const open = Linking.openURL` binds the function; calling it is the same direct call.
+        const init = unwrapExpression(node.init);
+        if (
+          Option.isSome(init) &&
+          init.value.type === "MemberExpression" &&
+          namesLinking(init.value.object) &&
+          isOpenUrlProperty(init.value.property)
+        ) {
+          const bound = identifierName(node.id);
+          if (Option.isSome(bound)) openUrlNames.add(bound.value);
+          context.report({ node: init.value, message: MESSAGE });
+        }
         const binding = unwrapExpression(node.id);
         if (Option.isNone(binding) || binding.value.type !== "ObjectPattern") return;
         if (!namesLinking(node.init)) return;

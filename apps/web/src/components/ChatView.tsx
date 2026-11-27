@@ -1102,6 +1102,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadShell = serverThread;
   const limitRecoveryRun =
     serverRuntime?.status === "failed" &&
+    serverRuntime.lastErrorCode !== "consumption_cap" &&
     (serverRuntime.lastErrorClass === "usage_limit" ||
       serverRuntime.lastErrorCode === CHATGPT_USAGE_LIMIT_CODE ||
       serverRuntime.lastErrorCode === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE)

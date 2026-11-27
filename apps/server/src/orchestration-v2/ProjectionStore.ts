@@ -265,6 +265,8 @@ export type ProjectionLimitRecoveryCandidate = Pick<
 > & {
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
+  readonly lastErrorCode?: string | null | undefined;
+  readonly consumptionCapHit?: OrchestrationV2AppThread["consumptionCapHit"] | undefined;
 };
 
 export type ProjectionStallRecoveryCandidate = Pick<
@@ -5163,10 +5165,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           EXISTS (
             SELECT 1
             FROM orchestration_v2_projection_threads child
-            INNER JOIN orchestration_v2_projection_runs child_run
+            -- Keep child outermost so 112_SubagentLineageIndex looks up only this parent's subagents.
+            CROSS JOIN orchestration_v2_projection_runs child_run
               ON child_run.thread_id = child.thread_id
             WHERE child.deleted_at IS NULL
-              AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+              -- Spelled as in 112_SubagentLineageIndex so the partial index serves it.
+              AND CASE WHEN json_valid(child.payload_json) THEN
+                json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                ELSE 0 END
               AND json_extract(child.payload_json, '$.lineage.parentThreadId') = t.thread_id
               AND child_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
           ) AS has_active_delegates,
@@ -5227,10 +5233,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND item.node_id IS json_extract(r.payload_json, '$.rootNodeId')
           INNER JOIN orchestration_v2_projection_threads t ON t.thread_id = item.thread_id
           WHERE t.deleted_at IS NULL
+            AND t.archived_at IS NULL
             ${threadId === undefined ? sql`` : sql`AND t.thread_id = ${threadId}`}
             AND item.type = 'error' AND item.status = 'failed'
-            AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+            -- Spelled as in 099_BackgroundRecoveryIndexes so the partial index serves it.
+            AND CASE WHEN json_valid(item.payload_json) THEN
+              json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+              ELSE 0 END
+            AND json_extract(item.payload_json, '$.failure.code') IS NOT 'consumption_cap'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NULL
+            AND (
+              NOT json_valid(t.payload_json)
+              OR json_extract(t.payload_json, '$.consumptionCapHit') IS NULL
+            )
             AND r.run_id IS (
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest
               WHERE latest.thread_id = t.thread_id
@@ -5322,8 +5337,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             )
             AND t.archived_at IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
+            AND (
+              NOT json_valid(t.payload_json)
+              OR json_extract(t.payload_json, '$.consumptionCapHit') IS NULL
+            )
             AND json_valid(item.payload_json)
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+            AND json_extract(item.payload_json, '$.failure.code') IS NOT 'consumption_cap'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
             AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
             AND (
@@ -5379,7 +5399,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.type === "error" ? item.failure : null,
             row.last_error,
           );
-          if (summary.lastErrorClass !== "usage_limit") continue;
+          if (
+            summary.lastErrorClass !== "usage_limit" ||
+            summary.lastErrorCode === "consumption_cap" ||
+            thread.consumptionCapHit != null
+          )
+            continue;
           candidates.push({
             id: thread.id,
             providerInstanceId: thread.providerInstanceId,
@@ -5412,7 +5437,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           SELECT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_threads t
             WHERE t.deleted_at IS NULL
-              AND json_extract(t.payload_json, '$.archivedAt') IS NULL
+              AND t.archived_at IS NULL
+              AND t.thread_id IN (
+                SELECT r.thread_id FROM orchestration_v2_projection_runs r
+                WHERE r.status IN ('preparing', 'starting', 'running', 'waiting')
+              )
+              AND json_valid(t.payload_json)
               AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
               AND json_extract(t.payload_json, '$.settledAt') IS NULL
               AND (
@@ -5426,11 +5456,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     )
                   END
                 )
-              )
-              AND EXISTS (
-                SELECT 1 FROM orchestration_v2_projection_runs r
-                WHERE r.thread_id = t.thread_id
-                  AND r.status IN ('preparing', 'starting', 'running', 'waiting')
               )
           ) AS active
         `;
@@ -5577,7 +5602,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             SELECT json_extract(payload_json, '$.stallRecovery.nextAttemptAt') AS next_at
             FROM orchestration_v2_projection_threads
             WHERE deleted_at IS NULL
-              AND json_extract(payload_json, '$.stallRecovery.runId') IS NOT NULL
+              AND archived_at IS NULL
+              -- Spelled as in 113_OverloadedFailureIndex so the partial index serves it.
+              AND CASE WHEN json_valid(payload_json) THEN
+                json_extract(payload_json, '$.stallRecovery.runId') IS NOT NULL
+                ELSE 0 END
           )
         `;
         const next = rows[0]?.next_ms;
@@ -9612,7 +9641,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           SELECT payload_json
           FROM orchestration_v2_projection_threads
           WHERE deleted_at IS NULL
-            AND json_array_length(payload_json, '$.threadWatches') > 0
+            -- Spelled as in 113_OverloadedFailureIndex so the partial index serves it.
+            AND CASE WHEN json_valid(payload_json) THEN
+              json_type(payload_json, '$.threadWatches[0]') IS NOT NULL
+              ELSE 0 END
           ORDER BY updated_at ASC, thread_id ASC
         `;
         return yield* Effect.forEach(rows, (row) =>

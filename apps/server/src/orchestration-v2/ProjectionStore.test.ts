@@ -13054,8 +13054,61 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           ),
           `Expected consumption_cap partial index in query plan:\n${plan.join("\n")}`,
         );
+        assert.isTrue(
+          plan.some((detail) =>
+            detail.includes("orchestration_v2_projection_threads_subagent_parent_idx"),
+          ),
+          `Expected subagent_parent partial index in query plan:\n${plan.join("\n")}`,
+        );
         for (const detail of plan) {
           assert.notMatch(detail, /^SCAN (t|child|child_run|item|r)\b(?! USING INDEX)/);
+        }
+      }
+
+      // Verify recurring recovery/watcher queries hit their partial indexes and never scan full tables.
+      const indexedChecks = [
+        {
+          name: "getUsageLimitFailuresWithoutReset",
+          expectedIndex: "orchestration_v2_projection_turn_items_usage_limit_idx",
+          run: (tracer: ReturnType<typeof traceSqlStatements>["tracer"]) =>
+            store.getUsageLimitFailuresWithoutReset().pipe(Effect.withTracer(tracer)),
+        },
+        {
+          name: "getStallRecoveryWakeAt",
+          expectedIndex: "orchestration_v2_projection_threads_stall_recovery_idx",
+          run: (tracer: ReturnType<typeof traceSqlStatements>["tracer"]) =>
+            store.getStallRecoveryWakeAt(rolledBackAt).pipe(Effect.withTracer(tracer)),
+        },
+        {
+          name: "getThreadWatchers",
+          expectedIndex: "orchestration_v2_projection_threads_thread_watches_idx",
+          run: (tracer: ReturnType<typeof traceSqlStatements>["tracer"]) =>
+            store.getThreadWatchers().pipe(Effect.withTracer(tracer)),
+        },
+        {
+          name: "hasActivePullRequestThread",
+          expectedIndex: "orchestration_v2_projection_runs",
+          run: (tracer: ReturnType<typeof traceSqlStatements>["tracer"]) =>
+            store.hasActivePullRequestThread().pipe(Effect.withTracer(tracer)),
+        },
+      ] as const;
+      for (const check of indexedChecks) {
+        const { statements, tracer } = traceSqlStatements();
+        yield* check.run(tracer);
+        for (const statement of statements) {
+          const plan = (yield* capSql.unsafe<{ readonly detail: string }>(
+            `EXPLAIN QUERY PLAN ${statement}`,
+          )).map((row) => row.detail);
+          assert.isTrue(
+            plan.some((detail) => detail.includes(check.expectedIndex)),
+            `Expected ${check.expectedIndex} in ${check.name} query plan:\n${plan.join("\n")}`,
+          );
+          for (const detail of plan) {
+            assert.notMatch(
+              detail,
+              /^SCAN (t|orchestration_v2_projection_threads)\b(?! USING INDEX)/,
+            );
+          }
         }
       }
 
@@ -13127,6 +13180,81 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           hasActiveBackgroundWork: false,
         },
       ]);
+
+      // A failed run with failure.code = "consumption_cap" must never appear in
+      // getUsageLimitFailuresWithoutReset or getLimitRecoveryCandidates.
+      const capErrorAt = DateTime.add(afterSubagentAt, { seconds: 1 });
+      const capErrorRunId = RunId.make("run:consumption-cap-candidates:cap-error");
+      const capErrorNodeId = NodeId.make("node:consumption-cap-candidates:cap-error");
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:cap-error-run"),
+        type: "run.created",
+        threadId,
+        runId: capErrorRunId,
+        driver,
+        providerInstanceId,
+        occurredAt: capErrorAt,
+        payload: {
+          id: capErrorRunId,
+          threadId,
+          ordinal: 3,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:consumption-cap-candidates:cap-error"),
+          rootNodeId: capErrorNodeId,
+          activeAttemptId: null,
+          status: "failed",
+          requestedAt: capErrorAt,
+          startedAt: capErrorAt,
+          completedAt: capErrorAt,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make("event:consumption-cap-candidates:cap-error-item"),
+        type: "turn-item.updated",
+        threadId,
+        runId: capErrorRunId,
+        nodeId: capErrorNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: capErrorAt,
+        payload: {
+          id: TurnItemId.make("item:consumption-cap-candidates:cap-error"),
+          threadId,
+          runId: capErrorRunId,
+          nodeId: capErrorNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          type: "error",
+          status: "failed",
+          title: null,
+          startedAt: capErrorAt,
+          completedAt: capErrorAt,
+          updatedAt: capErrorAt,
+          failure: {
+            class: "usage_limit",
+            code: "consumption_cap",
+            message: "Spend cap reached.",
+            retryable: false,
+            resetAt: null,
+          },
+        },
+      });
+      assert.deepEqual(yield* store.getUsageLimitFailuresWithoutReset(threadId), []);
+      assert.deepEqual(
+        (yield* store.getLimitRecoveryCandidates({
+          now: DateTime.add(capErrorAt, { seconds: 1 }),
+          autoResume: true,
+          snooze: true,
+        })).filter((entry) => entry.id === threadId),
+        [],
+      );
     }),
   );
 

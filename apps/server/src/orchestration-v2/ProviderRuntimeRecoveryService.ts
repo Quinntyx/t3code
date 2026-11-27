@@ -593,10 +593,34 @@ export const make = Effect.gen(function* () {
       const unsentResumeRunIds = runs.flatMap((run) =>
         run.startedAt === null && run.usageLimitContinuationOfRunId !== undefined ? [run.id] : [],
       );
+      const unsentStallRunIds = runs.flatMap((run) =>
+        run.startedAt === null && run.stallContinuationOfRunId !== undefined ? [run.id] : [],
+      );
       const limitRecovery = projection.thread.limitRecovery;
+      const stallRecovery = projection.thread.stallRecovery;
+      const nextLimitRecovery =
+        limitRecovery?.autoResume === true && unsentResumeRunIds.length > 0
+          ? { ...limitRecovery, requestId: commandId }
+          : undefined;
+      // An unsent stall retry already spent its command id; bump nextAttemptAt so StallRecoveryWorker
+      // gets a fresh deliveryIdentity instead of re-dispatching the spent command as a no-op forever.
+      const nextStallRecovery =
+        stallRecovery != null && unsentStallRunIds.length > 0
+          ? {
+              ...stallRecovery,
+              nextAttemptAt: DateTime.formatIso(
+                DateTime.makeUnsafe(
+                  Math.max(
+                    DateTime.toEpochMillis(now),
+                    Date.parse(stallRecovery.nextAttemptAt) + 1,
+                  ),
+                ),
+              ),
+            }
+          : undefined;
       // The unsent resume spent the worker's request id, so a fresh one lets it send again. An
       // untagged resume from an older server stays cancelled: its copy couldn't be hidden.
-      if (limitRecovery?.autoResume === true && unsentResumeRunIds.length > 0) {
+      if (nextLimitRecovery !== undefined || nextStallRecovery !== undefined) {
         events.push({
           id: yield* allocateEventId(),
           type: "thread.metadata-updated",
@@ -604,20 +628,22 @@ export const make = Effect.gen(function* () {
           occurredAt: now,
           payload: {
             ...projection.thread,
-            limitRecovery: { ...limitRecovery, requestId: commandId },
+            ...(nextLimitRecovery === undefined ? {} : { limitRecovery: nextLimitRecovery }),
+            ...(nextStallRecovery === undefined ? {} : { stallRecovery: nextStallRecovery }),
             updatedAt: now,
           },
         });
       }
       // The worker sends the auto-resume again, so the unsent copy leaves the transcript the way
       // cancelled queued input does.
+      const unsentContinuationRunIds = [...unsentResumeRunIds, ...unsentStallRunIds];
       const unsentResumePrompts =
-        unsentResumeRunIds.length === 0
+        unsentContinuationRunIds.length === 0
           ? []
           : (yield* projections
               .getThreadRecords(projection.thread.id, ["turnItems"], {
                 turnItemTypes: ["user_message"],
-                turnItemRunIds: unsentResumeRunIds,
+                turnItemRunIds: unsentContinuationRunIds,
               })
               .pipe(
                 Effect.mapError(

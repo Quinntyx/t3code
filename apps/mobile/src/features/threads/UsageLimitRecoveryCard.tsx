@@ -75,6 +75,7 @@ export function UsageLimitRecoveryCard({
 
   if (
     thread.runtime?.status !== "failed" ||
+    code === "consumption_cap" ||
     // Older servers report ChatGPT sharing limits as provider errors.
     (thread.runtime.lastErrorClass !== "usage_limit" && !chatGptLimit) ||
     !runId
