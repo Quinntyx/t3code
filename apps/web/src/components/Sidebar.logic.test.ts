@@ -1414,18 +1414,6 @@ describe("Working shelf (beta)", () => {
       ],
     };
     expect(isSidebarThreadWorking(delegating)).toBe(true);
-    expect(
-      isSidebarThreadWorking({
-        ...delegating,
-        runtime: {
-          ...runtime,
-          status: "failed" as const,
-          lastError: "Daily limit reached",
-          lastErrorClass: "usage_limit" as const,
-          lastErrorCode: "consumption_cap",
-        },
-      }),
-    ).toBe(false);
   });
 
   describe("sortInboxThreadsByReturn", () => {

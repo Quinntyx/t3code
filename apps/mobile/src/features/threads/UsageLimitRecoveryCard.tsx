@@ -33,7 +33,6 @@ export function UsageLimitRecoveryCard({
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const consumptionCapHit = thread.consumptionCapHit ?? null;
   const resetAt = thread.runtime?.usageLimitResetAt ?? null;
   const canSchedule =
     thread.settledOverride !== "settled" &&
@@ -59,51 +58,8 @@ export function UsageLimitRecoveryCard({
   // OpenAI's partner guidelines specify the ChatGPT notice and its action.
   const workspaceLimit = code === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || code === CHATGPT_USAGE_LIMIT_CODE;
-  if (consumptionCapHit !== null) {
-    const removeCap = async () => {
-      if (pending) return;
-      setPending(true);
-      setError(null);
-      try {
-        const result = await updateMetadata({
-          environmentId,
-          input: {
-            threadId: thread.id,
-            consumptionCap: null,
-          },
-        });
-        if (AsyncResult.isFailure(result)) {
-          setError(errorDisplayMessage(squashAtomCommandFailure(result)));
-        }
-      } finally {
-        setPending(false);
-      }
-    };
-    return (
-      <View className="mx-3 mb-2 flex-row items-start justify-between gap-2 rounded-xl border border-warning-foreground/25 bg-screen p-3">
-        <View className="min-w-0 flex-1 gap-1">
-          <Text className="text-sm text-warning-foreground">{gt("Consumption cap reached.")}</Text>
-          <Text className="text-sm text-foreground-muted">{consumptionCapHit.reason}</Text>
-          <Text className="text-sm text-foreground-muted">
-            {gt("Raise or remove the thread's consumption cap to continue.")}
-          </Text>
-          {error ? <Text className="text-xs text-destructive-foreground">{error}</Text> : null}
-        </View>
-        <Pressable
-          accessibilityRole="button"
-          disabled={pending}
-          onPress={() => void removeCap()}
-          className="rounded-lg border border-border bg-surface px-2.5 py-1.5 active:opacity-70"
-        >
-          <Text className="text-xs font-medium text-foreground">{gt("Remove")}</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
   if (
     thread.runtime?.status !== "failed" ||
-    code === "consumption_cap" ||
     // Older servers report ChatGPT sharing limits as provider errors.
     (thread.runtime.lastErrorClass !== "usage_limit" && !chatGptLimit) ||
     !runId

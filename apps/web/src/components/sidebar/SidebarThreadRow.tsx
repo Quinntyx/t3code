@@ -413,11 +413,9 @@ function SidebarThreadTooltip({
           >
             <CircleAlertIcon className="size-3 shrink-0 stroke-current" />
             <div className="min-w-0 truncate">
-              {thread.consumptionCapHit != null
-                ? gt("Consumption cap reached")
-                : thread.runtime.lastErrorClass === "usage_limit"
-                  ? gt("Usage limit reached")
-                  : gt("Error occurred")}
+              {thread.runtime.lastErrorClass === "usage_limit"
+                ? gt("Usage limit reached")
+                : gt("Error occurred")}
             </div>
           </div>
         ) : null}

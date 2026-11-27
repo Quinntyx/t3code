@@ -5116,8 +5116,6 @@
   "3607b0330d0f2d37": "Fase {title}, {tone, select, working {en curso} completed {completada} failed {con errores} stopped {detenida} other {en cola}}",
   "815190b32ad959c9": "Su hilo aún no está disponible",
   "2a61b633ec5035a5": "Aún no hay agentes",
-  "da4e079373807c1f": "Se alcanzó el límite de consumo.",
-  "bc7d6dd6b21c5f92": "Aumenta o quita el límite de consumo del hilo para continuar.",
   "fe32057bfc66015e": "Se reanuda {date}.",
   "7792e72ddecb6733": "Se restableció {date}.",
   "1ff565598548c159": "Se restablece {date}.",

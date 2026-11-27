@@ -1,5 +1,4 @@
 import { OrchestrationMessageContext } from "./composerContext.ts";
-import { ThreadConsumptionCap, ThreadConsumptionCapHit } from "./threadConsumptionCap.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -595,8 +594,6 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   stallRecovery: Schema.optional(Schema.NullOr(OrchestrationV2StallRecovery)),
-  consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
-  consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2577,8 +2574,6 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   stallRecovery: Schema.optional(Schema.NullOr(OrchestrationV2StallRecovery)),
-  consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
-  consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -3450,13 +3445,6 @@ export const OrchestrationV2Command = Schema.Union([
      * do under their caller's dispatch limit. Otherwise Stop also stops every task under the thread.
      */
     stopDelegatedTasks: Schema.optional(Schema.Boolean),
-    /** A consumption-cap stop only lands while this cap and hit are still current. */
-    consumptionCapGuard: Schema.optional(
-      Schema.Struct({
-        cap: Schema.NullOr(ThreadConsumptionCap),
-        hitAt: IsoDateTime,
-      }),
-    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.create"),
@@ -3645,12 +3633,6 @@ export const OrchestrationV2Command = Schema.Union([
     stallRecovery: Schema.optional(Schema.NullOr(OrchestrationV2StallRecoveryUpdate)),
     /** Retry a stalled thread now, on the server's clock. */
     stallRetryNow: Schema.optional(Schema.Literal(true)),
-    /** Replaces the whole cap; null clears it and its hit. */
-    consumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
-    /** Worker-written hit marker; removing the cap clears it. */
-    consumptionCapHit: Schema.optional(Schema.NullOr(ThreadConsumptionCapHit)),
-    /** Rejects a worker hit or clear evaluated against an older cap. */
-    expectedConsumptionCap: Schema.optional(Schema.NullOr(ThreadConsumptionCap)),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   }),

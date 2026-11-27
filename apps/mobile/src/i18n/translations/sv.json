@@ -5123,8 +5123,6 @@
   "3607b0330d0f2d37": "Fasen {title}, {tone, select, working {arbetar} completed {slutförd} failed {misslyckades} stopped {stoppad} other {i kö}}",
   "815190b32ad959c9": "Dess tråd är inte tillgänglig än",
   "2a61b633ec5035a5": "Inga agenter än",
-  "da4e079373807c1f": "Förbrukningsgränsen har nåtts.",
-  "bc7d6dd6b21c5f92": "Höj eller ta bort trådens förbrukningsgräns för att fortsätta.",
   "fe32057bfc66015e": "Återupptas {date}.",
   "7792e72ddecb6733": "Återställdes {date}.",
   "1ff565598548c159": "Återställs {date}.",

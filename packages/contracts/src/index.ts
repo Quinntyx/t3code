@@ -69,7 +69,6 @@ export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./previewCapture.ts";
 export * from "./usage.ts";
-export * from "./threadConsumptionCap.ts";
 export * from "./pycells.ts";
 export * from "./scheduledTask.ts";
 export * from "./milestones.ts";

@@ -5117,8 +5117,6 @@
   "3607b0330d0f2d37": "Phase {title}, {tone, select, working {en cours} completed {terminée} failed {en échec} stopped {arrêtée} other {en file d’attente}}",
   "815190b32ad959c9": "Son fil n’est pas encore disponible",
   "2a61b633ec5035a5": "Pas encore d’agent",
-  "da4e079373807c1f": "Plafond de consommation atteint.",
-  "bc7d6dd6b21c5f92": "Augmentez ou supprimez le plafond de consommation du fil pour continuer.",
   "fe32057bfc66015e": "Reprise le {date}.",
   "7792e72ddecb6733": "Réinitialisé le {date}.",
   "1ff565598548c159": "Réinitialisation le {date}.",

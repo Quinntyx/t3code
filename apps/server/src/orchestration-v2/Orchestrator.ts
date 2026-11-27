@@ -70,7 +70,6 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
-  ThreadConsumptionCap,
   latestProviderTurnForAttempt,
   repositoryRewindCheckpoint,
   parseGoalCommand,
@@ -638,7 +637,6 @@ function wakeWorkStartedAt(
 }
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
-const threadConsumptionCapEquals = Schema.toEquivalence(Schema.NullOr(ThreadConsumptionCap));
 
 /** Unfinished runs (including queued) or open requests block moving a thread to another project. */
 export function threadHasUnfinishedWork(records: {
@@ -4958,10 +4956,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         !Number.isFinite(resetMs) ||
         thread.archivedAt !== null ||
-        thread.consumptionCapHit != null ||
         run?.id !== command.limitRecovery.runId ||
         failure?.class !== "usage_limit" ||
-        failure.code === "consumption_cap" ||
         failure.resetAt !== command.limitRecovery.resetAt ||
         resetMs <= DateTime.toEpochMillis(run.completedAt ?? run.requestedAt) ||
         projection.runtimeRequests.some((request) => request.status === "pending")
@@ -5001,7 +4997,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         run === null ||
         thread.archivedAt !== null ||
-        thread.consumptionCapHit != null ||
         thread.settledOverride === "settled" ||
         projection.runtimeRequests.some((request) => request.status === "pending")
       ) {
@@ -5271,16 +5266,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
         }
         case "thread.metadata.update": {
-          if (
-            command.expectedConsumptionCap !== undefined &&
-            command.consumptionCapHit !== undefined &&
-            !threadConsumptionCapEquals(
-              command.expectedConsumptionCap,
-              thread.consumptionCap ?? null,
-            )
-          ) {
-            return thread;
-          }
           const previousRecovery =
             thread.limitRecovery?.runId === command.limitRecovery?.runId &&
             thread.limitRecovery?.resetAt === command.limitRecovery?.resetAt
@@ -5320,16 +5305,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ? {}
               : { stallRecovery: command.stallRecovery }),
             ...(stallRetryNowRecovery === null ? {} : { stallRecovery: stallRetryNowRecovery }),
-            // Removing the cap clears its hit at once. Any other edit waits for the
-            // sweep to re-evaluate, so saving cannot lift a hit it still meets.
-            ...(command.consumptionCap === undefined
-              ? {}
-              : command.consumptionCap === null
-                ? { consumptionCap: null, consumptionCapHit: null }
-                : { consumptionCap: command.consumptionCap }),
-            ...(command.consumptionCapHit === undefined
-              ? {}
-              : { consumptionCapHit: command.consumptionCapHit }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&
             Date.parse(limitRecovery.resetAt) > DateTime.toEpochMillis(now)
@@ -7513,9 +7488,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
         failure?.class !== "usage_limit" ||
-        failure.code === "consumption_cap" ||
         shell.lastErrorClass !== "usage_limit" ||
-        projection.thread.consumptionCapHit != null ||
         agentsWaiting ||
         !recovery?.autoResume ||
         recovery.requestId !== command.usageLimitRecoveryRequestId ||
@@ -7535,12 +7508,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           recovery.runId === command.usageLimitContinuationOfRunId &&
           ((projection.thread.snoozedUntil != null &&
             DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now)) ||
-            ((agentsWaiting ||
-              hasPendingRuntimeRequest ||
-              projection.thread.consumptionCapHit != null) &&
+            ((agentsWaiting || hasPendingRuntimeRequest) &&
               run?.id === command.usageLimitContinuationOfRunId &&
               failure?.class === "usage_limit" &&
-              failure.code !== "consumption_cap" &&
               recovery.resetAt === failure.resetAt &&
               shell.lastErrorClass === "usage_limit" &&
               projection.thread.archivedAt === null &&
@@ -7601,7 +7571,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.thread.archivedAt !== null ||
-        projection.thread.consumptionCapHit != null ||
         projection.thread.settledOverride === "settled" ||
         (yield* delegatedParentAbandoned(command, projection.thread))
       ) {
@@ -15054,15 +15023,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     if (projection.thread.deletedAt !== null) return undefined;
-    if (command.consumptionCapGuard !== undefined) {
-      const guard = command.consumptionCapGuard;
-      if (
-        !threadConsumptionCapEquals(guard.cap, projection.thread.consumptionCap ?? null) ||
-        projection.thread.consumptionCapHit?.at !== guard.hitAt
-      ) {
-        return undefined;
-      }
-    }
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
       command.stopDelegatedTasks === false ||

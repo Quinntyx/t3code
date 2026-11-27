@@ -154,7 +154,6 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly stallRecovery?: null;
   /** Retries a stalled thread now, on the server's clock. */
   readonly stallRetryNow?: true;
-  readonly consumptionCap?: import("@t3tools/contracts").ThreadConsumptionCap | null;
   readonly title?: string;
   readonly modelSelection?: ModelSelection;
   readonly branch?: string | null;
@@ -730,15 +729,13 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.linkedPullRequest !== undefined ||
       input.limitRecovery !== undefined ||
       input.stallRecovery !== undefined ||
-      input.stallRetryNow !== undefined ||
-      input.consumptionCap !== undefined
+      input.stallRetryNow !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
         ...(input.limitRecovery === undefined ? {} : { limitRecovery: input.limitRecovery }),
         ...(input.stallRecovery === undefined ? {} : { stallRecovery: input.stallRecovery }),
         ...(input.stallRetryNow === undefined ? {} : { stallRetryNow: input.stallRetryNow }),
-        ...(input.consumptionCap === undefined ? {} : { consumptionCap: input.consumptionCap }),
         commandId,
         threadId: input.threadId,
         ...(input.title === undefined ? {} : { title: input.title }),

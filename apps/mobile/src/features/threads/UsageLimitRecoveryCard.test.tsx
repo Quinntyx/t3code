@@ -1,4 +1,3 @@
-import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
@@ -34,11 +33,8 @@ vi.mock("../../components/ui/Button", () => ({
     </button>
   ),
 }));
-const { updateMetadataMock } = vi.hoisted(() => ({
-  updateMetadataMock: vi.fn(),
-}));
 vi.mock("../../state/threads", () => ({ threadEnvironment: { updateMetadata: {} } }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => updateMetadataMock }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 
@@ -60,49 +56,6 @@ function failedThread(
 }
 
 describe("UsageLimitRecoveryCard", () => {
-  // The sweep writes the cap; there is no failed run to recover.
-  it("shows a consumption cap on a thread that never failed and allows removing it", async () => {
-    updateMetadataMock.mockReset().mockResolvedValueOnce(AsyncResult.success(undefined));
-    const container = document.createElement("div");
-    const root = createRoot(container);
-    using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
-    act(() =>
-      root.render(
-        <UsageLimitRecoveryCard
-          thread={
-            {
-              id: "thread-1",
-              updatedAt: new Date(0).toISOString(),
-              snoozedUntil: null,
-              latestRun: null,
-              limitRecovery: null,
-              runtime: { status: "idle" },
-              consumptionCapHit: {
-                at: new Date(0).toISOString(),
-                reason: "API spend reached $1.00.",
-              },
-            } as unknown as EnvironmentThreadShell
-          }
-          environmentId={"env-1" as EnvironmentId}
-        />,
-      ),
-    );
-    expect(container.textContent).toContain("Consumption cap reached.");
-    expect(container.textContent).toContain("API spend reached $1.00.");
-    const removeButton = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Remove",
-    );
-    expect(removeButton).toBeDefined();
-    await act(async () => removeButton!.click());
-    expect(updateMetadataMock).toHaveBeenCalledWith({
-      environmentId: "env-1",
-      input: {
-        threadId: "thread-1",
-        consumptionCap: null,
-      },
-    });
-  });
-
   // Older servers report ChatGPT sharing limits as provider errors and may store a reset.
   it.each([
     [CHATGPT_USAGE_LIMIT_CODE, "usage_limit", null, ["Manage usage"]],

@@ -5125,8 +5125,6 @@
   "3607b0330d0f2d37": "{title} phase, {tone, select, working {working} completed {completed} failed {failed} stopped {stopped} other {queued}}",
   "815190b32ad959c9": "Its thread is not available yet",
   "2a61b633ec5035a5": "No agents yet",
-  "da4e079373807c1f": "Consumption cap reached.",
-  "bc7d6dd6b21c5f92": "Raise or remove the thread's consumption cap to continue.",
   "fe32057bfc66015e": "Resumes {date}.",
   "7792e72ddecb6733": "Reset {date}.",
   "1ff565598548c159": "Resets {date}.",

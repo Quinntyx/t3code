@@ -500,20 +500,13 @@ const layerBase: Layer.Layer<
           event.type !== "turn-item.updated" ||
           event.payload.type !== "error" ||
           event.payload.failure.class !== "usage_limit" ||
-          event.payload.failure.code === "consumption_cap" ||
           event.payload.failure.resetAt == null
         )
           continue;
         const failures = yield* projectionStore.getUsageLimitFailuresWithoutReset(event.threadId);
         const current = failures.find(({ item }) => item.id === event.payload.id)?.item;
-        if (
-          current === undefined ||
-          current.runId !== event.payload.runId ||
-          current.failure.code === "consumption_cap"
-        )
-          continue;
+        if (current === undefined || current.runId !== event.payload.runId) continue;
         const thread = yield* projectionStore.getThread(event.threadId);
-        if (thread.consumptionCapHit != null) continue;
         updates.push({
           ...event,
           occurredAt: DateTime.max(event.occurredAt, thread.updatedAt),

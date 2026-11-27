@@ -5,7 +5,6 @@ import {
   type OrchestrationV2LimitRecovery,
   type OrchestrationV2LimitRecoveryUpdate,
   type RunId,
-  type ThreadConsumptionCapHit,
 } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { deadlineStore } from "@t3tools/client-runtime/clock";
@@ -34,7 +33,6 @@ type RecoveryProps = {
   requestPending: boolean;
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
-  consumptionCapHit?: ThreadConsumptionCapHit | null;
   timestampFormat: TimestampFormat;
   resetPassed?: boolean;
   displayPassed?: boolean;
@@ -90,20 +88,6 @@ export function usageLimitRecoveryBannerItem(
   resolve: MessageResolver = m,
 ): ComposerBannerStackItem {
   const { runId, errorCode, resetAt, timestampFormat } = props;
-  if (props.consumptionCapHit) {
-    return {
-      id: `usage-limit-recovery:${runId}`,
-      variant: "warning",
-      group: "environment",
-      icon: <GaugeIcon />,
-      title: resolve(msg("Consumption cap reached")),
-      description: resolve(
-        msg("{reason} Raise or remove the thread's consumption cap to continue.", {
-          reason: props.consumptionCapHit.reason,
-        }),
-      ),
-    };
-  }
   const { canSchedule, resumes, displayAt } = limitRecoveryScheduleState(props);
   const resetAtMs = parseEpochMs(resetAt);
   const displayAtMs = parseEpochMs(displayAt);

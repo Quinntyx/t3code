@@ -285,19 +285,6 @@ describe("resolveThreadListV2Status", () => {
     const delegating = presentThreadShell(environmentId, decodeThreadShell(raw));
     expect(isThreadWorking(delegating)).toBe(true);
     expect(resolveThreadListV2Status(delegating)).toBe("waiting");
-
-    const capBlocked = presentThreadShell(
-      environmentId,
-      decodeThreadShell({
-        ...raw,
-        consumptionCapHit: {
-          at: NOW,
-          reason: "Daily spending limit reached",
-        },
-      }),
-    );
-    expect(isThreadWorking(capBlocked)).toBe(false);
-    expect(resolveThreadListV2Status(capBlocked)).toBe("limited");
   });
 });
 

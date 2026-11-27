@@ -706,36 +706,6 @@ export const layer: Layer.Layer<
           });
         },
       );
-      if (projection.thread.consumptionCapHit != null) {
-        const now = yield* DateTime.now;
-        yield* settleRunBeforeStart({
-          run,
-          rootNode,
-          attempt,
-          turnItems: projection.turnItems,
-          signal: "consumption-cap",
-          status: "failed",
-          now,
-          providerInstanceId: run.providerInstanceId,
-          itemProviderThreadId: providerThread.id,
-          item: {
-            type: "error",
-            title: "Consumption cap reached",
-            failure: makeProviderFailure({
-              class: "usage_limit",
-              code: "consumption_cap",
-              message: projection.thread.consumptionCapHit.reason,
-              retryable: false,
-            }),
-          },
-          providerThreadUpdate: {
-            ...providerThread,
-            status: providerThread.nativeThreadRef === null ? "not_loaded" : "idle",
-            updatedAt: now,
-          },
-        });
-        return;
-      }
       if (
         expandAssistantCitationsForProvider(providerMessage.text).length >
         PROVIDER_SEND_TURN_MAX_INPUT_CHARS

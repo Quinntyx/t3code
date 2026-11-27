@@ -434,7 +434,6 @@ export function deriveThreadStructureRuntime(
     (session) => session.providerInstanceId === projection.thread.providerInstanceId,
   );
   const usageLimitedRun = presentedUsageLimitRun(projection);
-  const capHit = projection.thread.consumptionCapHit ?? null;
   const latestRunProjection = presentedLatestRun(projection);
   const activityRun = deriveThreadActivityRun(projection);
   const liveActivityRun = latestMatchingRun(projection, (run) =>
@@ -453,13 +452,12 @@ export function deriveThreadStructureRuntime(
   const backgroundWorkHoldsRun = backgroundWorkHoldsCompletion(pendingBackgroundTasks);
   const agentsHoldRun = waitingOnAgents({ pendingBackgroundTasks });
   // A pull request watch can hold a thread that never ran.
-  if (latestRun === null && !backgroundWorkHoldsRun && capHit === null) return null;
+  if (latestRun === null && !backgroundWorkHoldsRun) return null;
   const activeRunId =
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
   const failureItem = latestRootProviderFailureItem(latestRunProjection, projection.turnItems);
   const sessionError = providerSession?.lastError ?? null;
-  const stalledRunId =
-    capHit === null ? (stalledRun(projection.runs, projection.turnItems)?.id ?? null) : null;
+  const stalledRunId = stalledRun(projection.runs, projection.turnItems)?.id ?? null;
   const stalled = presentThreadStall({
     stalled: stalledRunId !== null,
     runId: stalledRunId,
@@ -467,17 +465,14 @@ export function deriveThreadStructureRuntime(
   });
   return {
     // Active subagents/workflows keep the thread parked in Working (Delegating) and intentionally
-    // defer the usage-limit recovery notice until delegated work settles (unless cap-blocked).
-    status:
-      capHit !== null
+    // defer the usage-limit recovery notice until delegated work settles.
+    status: agentsHoldRun
+      ? "idle"
+      : usageLimitedRun
         ? "failed"
-        : agentsHoldRun
+        : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
           ? "idle"
-          : usageLimitedRun
-            ? "failed"
-            : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
-              ? "idle"
-              : (activityRun?.status ?? "idle"),
+          : (activityRun?.status ?? "idle"),
     activeRunId,
     activityStartedAt:
       liveActivityRun === null
@@ -485,18 +480,8 @@ export function deriveThreadStructureRuntime(
         : DateTime.formatIso(orchestrationV2RunWorkStartedAt(liveActivityRun)),
     providerInstanceId: projection.thread.providerInstanceId,
     providerName: providerSession?.driver ?? null,
-    ...(capHit === null
-      ? threadErrorSummary(failureItem?.failure ?? null, sessionError)
-      : {
-          lastError: capHit.reason,
-          lastErrorClass: "usage_limit" as const,
-          lastErrorCode: "consumption_cap",
-          usageLimitResetAt: null,
-        }),
-    lastErrorSource:
-      capHit === null
-        ? threadErrorSource(failureItem, sessionError, projection)
-        : `consumption_cap@${capHit.at}`,
+    ...threadErrorSummary(failureItem?.failure ?? null, sessionError),
+    lastErrorSource: threadErrorSource(failureItem, sessionError, projection),
     ...stalled,
   };
 }

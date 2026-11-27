@@ -237,8 +237,6 @@ export interface EnvironmentThreadShell {
   readonly limitRecovery?: import("@t3tools/contracts").OrchestrationV2LimitRecovery | null;
   /** The server's retry of an overloaded run, when one is armed. */
   readonly stallRecovery?: OrchestrationV2StallRecovery | null;
-  readonly consumptionCap?: import("@t3tools/contracts").ThreadConsumptionCap | null;
-  readonly consumptionCapHit?: import("@t3tools/contracts").ThreadConsumptionCapHit | null;
   readonly pinnedAt: string | null;
   readonly autoSettleDisabledAt?: string | null;
   readonly pinOrderKey: string | null;
@@ -288,16 +286,14 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const parkAtIdle =
     waitingOnAgents({ pendingBackgroundTasks }) ||
     (backgroundWorkHoldsCompletion(pendingBackgroundTasks) && thread.status !== "failed");
-  if (thread.latestRunId === null && !parkAtIdle && thread.consumptionCapHit == null) {
+  if (thread.latestRunId === null && !parkAtIdle) {
     return null;
   }
-  const capHit = thread.consumptionCapHit ?? null;
-  const status =
-    capHit !== null ? "failed" : parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
+  const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
   // The server decides this. A cancelled queued message can be the run the shell presents
   // instead of the stalled one, and then the retry time is left out.
   const stalled = presentThreadStall({
-    stalled: capHit === null && thread.stalled === true,
+    stalled: thread.stalled === true,
     runId: thread.latestRunId,
     recovery: thread.stallRecovery,
   });
@@ -310,10 +306,10 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
         : nullableIso(thread.activityRunStartedAt),
     providerInstanceId: thread.providerInstanceId,
     providerName: null,
-    lastError: capHit?.reason ?? thread.lastError ?? null,
-    lastErrorClass: capHit === null ? (thread.lastErrorClass ?? null) : "usage_limit",
-    lastErrorCode: capHit === null ? (thread.lastErrorCode ?? null) : "consumption_cap",
-    usageLimitResetAt: capHit === null ? (thread.usageLimitResetAt ?? null) : null,
+    lastError: thread.lastError ?? null,
+    lastErrorClass: thread.lastErrorClass ?? null,
+    lastErrorCode: thread.lastErrorCode ?? null,
+    usageLimitResetAt: thread.usageLimitResetAt ?? null,
     ...stalled,
     updatedAt: iso(thread.updatedAt),
   };
@@ -411,8 +407,6 @@ export function presentThreadShell(
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     limitRecovery: thread.limitRecovery ?? null,
     stallRecovery: thread.stallRecovery ?? null,
-    consumptionCap: thread.consumptionCap ?? null,
-    consumptionCapHit: thread.consumptionCapHit ?? null,
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
     autoSettleDisabledAt: nullableIso(thread.autoSettleDisabledAt ?? null),
     pinOrderKey: thread.pinOrderKey ?? null,

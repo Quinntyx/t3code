@@ -88,7 +88,6 @@ export interface ProjectThreadAwarenessV2Input {
   readonly thread: Pick<
     OrchestrationV2ThreadShell,
     | "activityRunStatus"
-    | "consumptionCapHit"
     | "id"
     | "lineage"
     | "latestRunBackgroundWake"
@@ -170,8 +169,8 @@ function resolveThreadAwarenessPhaseV2(
   if (subagentRequest !== null) {
     return subagentRequest.waitsForInput === true ? "waiting_for_input" : "waiting_for_approval";
   }
-  // A stalled thread's failed run is retried by the server, unless a consumption cap halted it.
-  if (thread.stalled === true && thread.consumptionCapHit == null) return "running";
+  // A stalled thread's failed run is retried by the server.
+  if (thread.stalled === true) return "running";
   switch (thread.activityRunStatus ?? thread.status) {
     case "preparing":
     case "starting":
@@ -185,7 +184,7 @@ function resolveThreadAwarenessPhaseV2(
         ? "running"
         : "completed";
     case "failed":
-      return thread.consumptionCapHit == null && waitingOnAgents(thread) ? "running" : "failed";
+      return waitingOnAgents(thread) ? "running" : "failed";
     case "idle":
     case "queued":
     case "interrupted":

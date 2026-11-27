@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 import { resolveSubagentMetadata } from "@t3tools/client-runtime/state/subagent-display";
@@ -7,45 +6,30 @@ import type {
   EnvironmentId,
   ProviderDriverKind,
   ServerProvider,
-  ServerProviderUsageWindow,
-  ThreadConsumptionCap,
-  ThreadConsumptionCapCondition,
-  ThreadConsumptionCapHit,
   ThreadId,
   ThreadUsageGroup,
   ThreadUsageModel,
 } from "@t3tools/contracts";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { deriveThreadWorkedDuration, formatDuration } from "@t3tools/shared/orchestrationTiming";
-import { formatThreadUsageCost, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
+import { formatThreadUsageCost, formatTokens } from "@t3tools/shared/usageFormat";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { ChevronDownIcon, GaugeIcon, TimerIcon, UsersIcon } from "lucide-react";
-import { type MouseEvent, useState } from "react";
+import { useState } from "react";
 
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { useThreadUsage } from "../../hooks/useThreadUsage";
-import { m, type MessageResolver } from "../../i18n/messages";
-import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import {
   deriveProviderInstanceEntries,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { useEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
-import { threadEnvironment } from "../../state/threads";
-import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { formatDayAwareTimestamp, formatUsageChartTimestamp } from "../../timestampFormat";
 import { ThreadUsageChart, type ThreadUsageChartSeries } from "../usage/ThreadUsageChart";
 import { PROVIDER_PRESENTATION } from "../usage/usageProviders";
-import { toastManager } from "../ui/toast";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
-import {
-  ThreadConsumptionCapDialog,
-  type ThreadConsumptionCapRow,
-} from "./ThreadConsumptionCapDialog";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import {
@@ -60,62 +44,6 @@ const GROUP_LABEL: Record<ThreadUsageGroup, string> = {
   main: msg("Main agent"),
   delegates: msg("Delegates"),
 };
-
-const WINDOW_KIND_LABEL = {
-  session: msg("5h"),
-  weekly: msg("Weekly"),
-  monthly: msg("Monthly"),
-  other: msg("Window"),
-} as const;
-
-function isFiveHourOrWeekly(window: ServerProviderUsageWindow): boolean {
-  return (
-    window.kind === "session" ||
-    window.kind === "weekly" ||
-    window.windowDurationMins === 300 ||
-    window.windowDurationMins === 10_080
-  );
-}
-
-function consumptionCapConditionLabel(
-  condition: ThreadConsumptionCapCondition,
-  resolve: MessageResolver = m,
-): string {
-  const models = condition.models?.length;
-  if (condition.kind === "spend") {
-    const amount = formatUsd(condition.limitUsd);
-    return models === undefined
-      ? resolve(msg("{amount} total", { amount }))
-      : resolve(
-          msg("{amount} · {count, plural, one {{count} model} other {{count} models}}", {
-            amount,
-            count: models,
-          }),
-        );
-  }
-  const window = `${resolve(WINDOW_KIND_LABEL[condition.windowKind])} ${condition.atPercent}%`;
-  return models === undefined
-    ? window
-    : resolve(
-        msg("{window} · {count, plural, one {{count} model} other {{count} models}}", {
-          window,
-          count: models,
-        }),
-      );
-}
-
-function consumptionCapSummary(
-  cap: ThreadConsumptionCap | null,
-  hit: ThreadConsumptionCapHit | null,
-  resolve: MessageResolver = m,
-): string {
-  if (hit !== null) return hit.reason;
-  if (cap === null) return resolve(msg("Right-click to set a cap"));
-  const [first] = cap.conditions;
-  if (first === undefined) return resolve(msg("No limits"));
-  const more = cap.conditions.length > 1 ? ` +${cap.conditions.length - 1}` : "";
-  return `${consumptionCapConditionLabel(first, resolve)}${more}`;
-}
 
 function providerColor(driver: ProviderDriverKind): string {
   return (
@@ -286,18 +214,12 @@ export function ThreadUsagePanel(props: {
   readonly threadId: ThreadId;
 }) {
   const gt = useGT();
-  const resolve = useMessages();
   const threadRef = scopeThreadRef(props.environmentId, props.threadId);
   const { data, dataUpdatedAt, isPending, shell } = useThreadUsage(threadRef);
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ?? EMPTY_PROVIDERS;
   const [open, setOpen] = useState<ReadonlySet<ThreadUsageGroup>>(() => new Set());
-  const [capOpen, setCapOpen] = useState(false);
-  const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
-  const updateMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
-    reportFailure: false,
-  });
   if (data === null) return null;
   const hasUsage = data.startedAt !== null && data.models.length > 0;
   const workedFor = deriveThreadWorkedDuration({
@@ -325,96 +247,6 @@ export function ThreadUsagePanel(props: {
       showBadge: entry !== undefined && shouldShowInstanceBadge(entry, entries),
     };
   };
-  const cap = shell?.consumptionCap ?? null;
-  const capHit = shell?.consumptionCapHit ?? null;
-  const usageWindows = (providerInstanceId: string): ReadonlyArray<ServerProviderUsageWindow> =>
-    (
-      providers.find((provider) => provider.instanceId === providerInstanceId)?.usageLimits
-        ?.windows ?? []
-    ).filter(isFiveHourOrWeekly);
-  const capRows: ThreadConsumptionCapRow[] = (() => {
-    const rows = new Map<
-      string,
-      {
-        readonly model: Pick<ThreadUsageModel, "providerInstanceId" | "driver" | "model">;
-        costUsd: number | null;
-      }
-    >();
-    for (const model of data.models) {
-      const key = `${model.providerInstanceId}\u0000${model.model}`;
-      const existing = rows.get(key);
-      if (existing === undefined) {
-        rows.set(key, { model, costUsd: model.costUsd });
-      } else if (existing.costUsd !== null || model.costUsd !== null) {
-        existing.costUsd = (existing.costUsd ?? 0) + (model.costUsd ?? 0);
-      }
-    }
-    for (const condition of cap?.conditions ?? []) {
-      for (const model of condition.models ?? []) {
-        const key = `${model.providerInstanceId}\u0000${model.model}`;
-        if (!rows.has(key)) rows.set(key, { model, costUsd: null });
-      }
-    }
-    if (rows.size === 0 && shell !== null) {
-      const provider = providers.find(
-        (candidate) => candidate.instanceId === shell.modelSelection.instanceId,
-      );
-      if (provider !== undefined) {
-        rows.set(`${provider.instanceId}\u0000${shell.modelSelection.model}`, {
-          model: {
-            providerInstanceId: provider.instanceId,
-            driver: provider.driver,
-            model: shell.modelSelection.model,
-          },
-          costUsd: null,
-        });
-      }
-    }
-    return [...rows.entries()].map(([key, { model, costUsd }]) => {
-      const presentation = present(model);
-      return {
-        key,
-        providerInstanceId: model.providerInstanceId,
-        driver: model.driver,
-        model: model.model,
-        label: presentation.label,
-        costUsd,
-        windows: usageWindows(model.providerInstanceId),
-      };
-    });
-  })();
-  const handleContextMenu = (event: MouseEvent<HTMLElement>) => {
-    if (!canOperate) return;
-    const api = readLocalApi();
-    if (!api) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const items = [
-      {
-        id: "edit" as const,
-        label: cap === null ? gt("Set consumption cap…") : gt("Edit consumption cap…"),
-      },
-      ...(cap === null
-        ? []
-        : [{ id: "remove" as const, label: gt("Remove consumption cap"), destructive: true }]),
-    ];
-    void api.contextMenu.show(items, { x: event.clientX, y: event.clientY }).then((action) => {
-      if (action === "edit") setCapOpen(true);
-      if (action !== "remove") return;
-      void updateMetadata({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, consumptionCap: null },
-      }).then((result) => {
-        if (result._tag === "Success") return;
-        const cause = squashAtomCommandFailure(result);
-        toastManager.add({
-          type: "error",
-          title: m(msg("Could not remove consumption cap")),
-          description: cause instanceof Error ? cause.message : m(msg("An error occurred.")),
-        });
-      });
-    });
-  };
   const byTokens = (left: ThreadUsageModel, right: ThreadUsageModel) =>
     right.totalTokens - left.totalTokens;
   const groupModels = (group: ThreadUsageGroup) =>
@@ -441,7 +273,6 @@ export function ThreadUsagePanel(props: {
       headingId="thread-details-consumption-heading"
       title={gt("Consumption")}
       showHeading={false}
-      onContextMenu={handleContextMenu}
     >
       <div className="flex flex-col">
         <div className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex items-center")}>
@@ -485,26 +316,6 @@ export function ThreadUsagePanel(props: {
             </span>
           </div>
         ) : null}
-        <div
-          className={cn(THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS, "flex min-w-0 items-center")}
-          onContextMenu={handleContextMenu}
-        >
-          <GaugeIcon
-            aria-hidden
-            className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, capHit !== null && "text-warning")}
-          />
-          <span className={cn("flex-1", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
-            <T>Cap</T>
-          </span>
-          <span
-            className={cn(
-              "min-w-0 max-w-[62%] truncate text-xs tabular-nums",
-              capHit !== null ? "text-warning" : "text-muted-foreground",
-            )}
-          >
-            {consumptionCapSummary(cap, capHit, resolve)}
-          </span>
-        </div>
         {hasUsage
           ? (["main", "delegates"] as const).map((group) => (
               <UsageGroupRow
@@ -519,14 +330,6 @@ export function ThreadUsagePanel(props: {
             ))
           : null}
       </div>
-      <ThreadConsumptionCapDialog
-        open={capOpen}
-        onOpenChange={setCapOpen}
-        environmentId={props.environmentId}
-        threadId={props.threadId}
-        cap={cap}
-        rows={capRows}
-      />
     </ThreadDetailsSection>
   );
 }

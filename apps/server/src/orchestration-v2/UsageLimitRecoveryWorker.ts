@@ -49,8 +49,6 @@ export function limitRecoveryCommand(
   if (
     thread.status !== "failed" ||
     thread.lastErrorClass !== "usage_limit" ||
-    thread.lastErrorCode === "consumption_cap" ||
-    thread.consumptionCapHit != null ||
     !thread.latestRunId ||
     !thread.usageLimitResetAt ||
     thread.archivedAt !== null ||

@@ -5123,8 +5123,6 @@
   "3607b0330d0f2d37": "Phase {title}, {tone, select, working {läuft} completed {abgeschlossen} failed {fehlgeschlagen} stopped {gestoppt} other {eingereiht}}",
   "815190b32ad959c9": "Sein Thread ist noch nicht verfügbar",
   "2a61b633ec5035a5": "Noch keine Agenten",
-  "da4e079373807c1f": "Verbrauchslimit erreicht.",
-  "bc7d6dd6b21c5f92": "Erhöhe oder entferne das Verbrauchslimit des Threads, um fortzufahren.",
   "fe32057bfc66015e": "Wird am {date} fortgesetzt.",
   "7792e72ddecb6733": "Wurde am {date} zurückgesetzt.",
   "1ff565598548c159": "Wird am {date} zurückgesetzt.",

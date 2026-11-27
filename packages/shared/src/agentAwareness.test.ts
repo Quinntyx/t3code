@@ -25,7 +25,6 @@ describe("projectThreadAwarenessV2", () => {
         OrchestrationV2ThreadShell,
         | "activityRunStatus"
         | "latestRunBackgroundWake"
-        | "consumptionCapHit"
         | "latestRunStopRequested"
         | "status"
         | "pendingBackgroundTasks"
@@ -295,20 +294,6 @@ describe("projectThreadAwarenessV2", () => {
         thread: v2Thread({ status: "failed", pendingBackgroundTasks: tasks }),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
-    expect(
-      projectThreadAwarenessV2({
-        environmentId: "env-1" as EnvironmentId,
-        project,
-        thread: v2Thread({
-          status: "failed",
-          pendingBackgroundTasks: tasks,
-          consumptionCapHit: {
-            at: NOW,
-            reason: "Token budget reached",
-          },
-        }),
-      }),
-    ).toMatchObject({ phase: "failed" });
     expect(
       projectThreadAwarenessV2({
         environmentId: "env-1" as EnvironmentId,

@@ -266,7 +266,6 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   /** A linked pull request, or one discovered on the thread's branch. */
   readonly hasLinkedPullRequest: boolean;
   readonly lastErrorCode?: string | null | undefined;
-  readonly consumptionCapHit?: OrchestrationV2AppThread["consumptionCapHit"] | undefined;
 };
 
 export type ProjectionStallRecoveryCandidate = Pick<
@@ -285,13 +284,6 @@ export type ProjectionStallRecoveryCandidate = Pick<
   /** Set when the failed run was itself the retry of another, so consecutive stalls chain. */
   readonly stallContinuationOfRunId: RunId | null;
 };
-
-export interface ProjectionConsumptionCapCandidate {
-  readonly thread: OrchestrationV2AppThread;
-  readonly activeRunId: RunId | null;
-  readonly hasActiveDelegates: boolean;
-  readonly hasActiveBackgroundWork: boolean;
-}
 
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
@@ -763,10 +755,6 @@ export interface ProjectionStoreV2Shape {
   readonly findThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread | null, ProjectionStoreV2Error>;
-  readonly getConsumptionCapCandidates: () => Effect.Effect<
-    ReadonlyArray<ProjectionConsumptionCapCandidate>,
-    ProjectionStoreV2Error
-  >;
   readonly getUsageLimitFailuresWithoutReset: (threadId?: ThreadId) => Effect.Effect<
     ReadonlyArray<{
       readonly run: OrchestrationV2Run;
@@ -2062,9 +2050,7 @@ export function threadShellFromProjection(
   }
   const latestUserMessage = userMessages[0] ?? null;
   // The latest executed run decides, so a cancelled run that never started cannot hide a stall.
-  // A consumption cap stops retries, so a capped thread is no longer stalled.
-  const stalled =
-    projection.thread.consumptionCapHit == null && stalledRun(runs, projection.turnItems) !== null;
+  const stalled = stalledRun(runs, projection.turnItems) !== null;
   const pendingBackgroundTasks = derivePendingBackgroundWork({
     latestRun,
     providerThreads: projection.providerThreads,
@@ -2111,12 +2097,6 @@ export function threadShellFromProjection(
     ...(projection.thread.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: projection.thread.delegatedFrom }),
-    ...(projection.thread.consumptionCap === undefined
-      ? {}
-      : { consumptionCap: projection.thread.consumptionCap }),
-    ...(projection.thread.consumptionCapHit === undefined
-      ? {}
-      : { consumptionCapHit: projection.thread.consumptionCapHit }),
     ...(projection.thread.workflowRun === undefined
       ? {}
       : { workflowRun: projection.thread.workflowRun }),
@@ -2442,12 +2422,6 @@ function shellFromState(input: {
     ...(input.state.thread.delegatedFrom === undefined
       ? {}
       : { delegatedFrom: input.state.thread.delegatedFrom }),
-    ...(input.state.thread.consumptionCap === undefined
-      ? {}
-      : { consumptionCap: input.state.thread.consumptionCap }),
-    ...(input.state.thread.consumptionCapHit === undefined
-      ? {}
-      : { consumptionCapHit: input.state.thread.consumptionCapHit }),
     ...(input.state.thread.workflowRun === undefined
       ? {}
       : { workflowRun: input.state.thread.workflowRun }),
@@ -5145,78 +5119,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
     );
 
-    const getConsumptionCapCandidates = Effect.fn("ProjectionStore.getConsumptionCapCandidates")(
-      function* () {
-        const rows = yield* sql<{
-          readonly payload_json: string;
-          readonly active_run_id: string | null;
-          readonly has_active_delegates: number;
-          readonly has_active_background_work: number;
-        }>`
-        SELECT t.payload_json,
-          (
-            SELECT r.run_id FROM orchestration_v2_projection_runs r
-            WHERE r.thread_id = t.thread_id
-              AND r.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-            ORDER BY r.ordinal DESC
-            LIMIT 1
-          ) AS active_run_id,
-          EXISTS (
-            SELECT 1
-            FROM orchestration_v2_projection_threads child
-            -- Keep child outermost so 112_SubagentLineageIndex looks up only this parent's subagents.
-            CROSS JOIN orchestration_v2_projection_runs child_run
-              ON child_run.thread_id = child.thread_id
-            WHERE child.deleted_at IS NULL
-              -- Spelled as in 112_SubagentLineageIndex so the partial index serves it.
-              AND CASE WHEN json_valid(child.payload_json) THEN
-                json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
-                ELSE 0 END
-              AND json_extract(child.payload_json, '$.lineage.parentThreadId') = t.thread_id
-              AND child_run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-          ) AS has_active_delegates,
-          EXISTS (
-            SELECT 1
-            FROM orchestration_v2_projection_turn_items item
-            LEFT JOIN orchestration_v2_projection_runs item_run
-              ON item_run.run_id = item.run_id
-            WHERE item.thread_id = t.thread_id
-              AND item.type IN ('command_execution', 'dynamic_tool', 'subagent')
-              AND item.status IN ('pending', 'running', 'waiting')
-              AND (item_run.status IS NULL OR item_run.status <> 'rolled_back')
-              AND NOT (
-                item.type = 'dynamic_tool'
-                AND CASE WHEN json_valid(item.payload_json)
-                  THEN json_extract(item.payload_json, '$.input.persistent') = 1
-                  ELSE 0 END
-              )
-          ) AS has_active_background_work
-        FROM orchestration_v2_projection_threads t
-        WHERE t.deleted_at IS NULL
-          AND t.archived_at IS NULL
-          AND CASE WHEN json_valid(t.payload_json) THEN
-            json_extract(t.payload_json, '$.consumptionCap') IS NOT NULL
-            OR json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL
-            ELSE 0 END
-        ORDER BY t.thread_id
-      `;
-        return yield* Effect.forEach(
-          rows,
-          (row) =>
-            decodeThreadPayload(row.payload_json).pipe(
-              Effect.map((thread) => ({
-                thread,
-                activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
-                hasActiveDelegates: row.has_active_delegates === 1,
-                hasActiveBackgroundWork: row.has_active_background_work === 1,
-              })),
-            ),
-          { concurrency: 1 },
-        );
-      },
-      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
-    );
-
     const getUsageLimitFailuresWithoutReset = Effect.fn(
       "ProjectionStore.getUsageLimitFailuresWithoutReset",
     )(
@@ -5239,12 +5141,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND CASE WHEN json_valid(item.payload_json) THEN
               json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
               ELSE 0 END
-            AND json_extract(item.payload_json, '$.failure.code') IS NOT 'consumption_cap'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NULL
-            AND (
-              NOT json_valid(t.payload_json)
-              OR json_extract(t.payload_json, '$.consumptionCapHit') IS NULL
-            )
             AND r.run_id IS (
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest
               WHERE latest.thread_id = t.thread_id
@@ -5336,13 +5233,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             )
             AND t.archived_at IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
-            AND (
-              NOT json_valid(t.payload_json)
-              OR json_extract(t.payload_json, '$.consumptionCapHit') IS NULL
-            )
             AND json_valid(item.payload_json)
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
-            AND json_extract(item.payload_json, '$.failure.code') IS NOT 'consumption_cap'
             AND json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
             AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
             AND (
@@ -5398,12 +5290,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.type === "error" ? item.failure : null,
             row.last_error,
           );
-          if (
-            summary.lastErrorClass !== "usage_limit" ||
-            summary.lastErrorCode === "consumption_cap" ||
-            thread.consumptionCapHit != null
-          )
-            continue;
+          if (summary.lastErrorClass !== "usage_limit") continue;
           candidates.push({
             id: thread.id,
             providerInstanceId: thread.providerInstanceId,
@@ -5526,7 +5413,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           )
           AND t.archived_at IS NULL
           AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
-          AND json_extract(t.payload_json, '$.consumptionCapHit') IS NULL
           -- A thread waiting on the user cannot be retried underneath the question.
           AND NOT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_runtime_requests request
@@ -8955,8 +8841,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ) AS latest_run_stop_requested,
               ${isBackgroundWakeShellRun("presented")} AS latest_run_background_wake,
               -- stalledRun: the latest executed run's newest root error is an upstream overload,
-              -- and no Stop or consumption cap reached it.
-              CASE WHEN json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL THEN 0 ELSE (
+              -- and no Stop reached it.
+              (
                 SELECT CASE WHEN EXISTS (
                   SELECT 1 FROM orchestration_v2_projection_turn_items stopped
                   WHERE stopped.thread_id = t.thread_id AND stopped.run_id = executed.run_id
@@ -8992,7 +8878,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
                     LIMIT 1
                   ), '$.failure.class') IS NOT 'usage_limit'
-              ) END AS stalled,
+              ) AS stalled,
               active.run_id AS active_run_id,
               active.status AS active_run_status,
               (
@@ -9422,7 +9308,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS latest_user_authored_message_at,
               -- stalledRun, over the latest executed run rather than the presented one.
-              CASE WHEN json_extract(t.payload_json, '$.consumptionCapHit') IS NOT NULL THEN 0 ELSE (
+              (
                 SELECT CASE WHEN EXISTS (
                   SELECT 1 FROM orchestration_v2_projection_turn_items stopped
                   WHERE stopped.thread_id = t.thread_id AND stopped.run_id = executed.run_id
@@ -9459,7 +9345,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
                     LIMIT 1
                   ), '$.failure.class') IS NOT 'usage_limit'
-              ) END AS stalled
+              ) AS stalled
             FROM orchestration_v2_projection_threads t
             LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = (
               SELECT latest.run_id FROM orchestration_v2_projection_runs latest
@@ -10716,7 +10602,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRuntimeRequest: readOnReader(getRuntimeRequest),
       getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
-      getConsumptionCapCandidates: readOnReader(getConsumptionCapCandidates),
       getUsageLimitFailuresWithoutReset: readOnReader(getUsageLimitFailuresWithoutReset),
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
       hasActivePullRequestThread: readOnReader(hasActivePullRequestThread),

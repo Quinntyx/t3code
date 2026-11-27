@@ -36,17 +36,6 @@ export default Effect.gen(function* () {
         ELSE 0 END
   `;
 
-  // ConsumptionCapWorker sweeps capped threads on every scheduler tick; index only capped rows.
-  yield* sql`
-    CREATE INDEX IF NOT EXISTS orchestration_v2_projection_threads_consumption_cap_idx
-    ON orchestration_v2_projection_threads(thread_id)
-    WHERE deleted_at IS NULL AND archived_at IS NULL
-      AND CASE WHEN json_valid(payload_json) THEN
-        json_extract(payload_json, '$.consumptionCap') IS NOT NULL
-        OR json_extract(payload_json, '$.consumptionCapHit') IS NOT NULL
-        ELSE 0 END
-  `;
-
   // StallRecoveryWorker computes the next wake time after every idle sweep; index armed threads only.
   yield* sql`
     CREATE INDEX IF NOT EXISTS orchestration_v2_projection_threads_stall_recovery_idx

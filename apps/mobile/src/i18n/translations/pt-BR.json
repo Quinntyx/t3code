@@ -5117,8 +5117,6 @@
   "3607b0330d0f2d37": "Fase {title}, {tone, select, working {em andamento} completed {concluída} failed {com falha} stopped {parada} other {na fila}}",
   "815190b32ad959c9": "A thread dele ainda não está disponível",
   "2a61b633ec5035a5": "Nenhum agente ainda",
-  "da4e079373807c1f": "Limite de consumo atingido.",
-  "bc7d6dd6b21c5f92": "Aumente ou remova o limite de consumo da thread para continuar.",
   "fe32057bfc66015e": "Retoma {date}.",
   "7792e72ddecb6733": "Redefinido em {date}.",
   "1ff565598548c159": "Redefine {date}.",

@@ -87,59 +87,6 @@ describe("V2 client presentation", () => {
     });
     expect(again.runtime?.stalled).toBe(true);
     expect(again.runtime?.stallNextAttemptAt).toBeUndefined();
-
-    // A consumption cap outranks the stall: the thread waits on the cap, not a retry.
-    const capped = presentThreadShell(environmentId, {
-      ...overloaded,
-      stalled: true,
-      stallRecovery: { runId, attempt: 1, nextAttemptAt: stalledUntil },
-      consumptionCapHit: {
-        at: DateTime.formatIso(v2ThreadShell.updatedAt),
-        reason: "5h usage 90% reached 80% cap.",
-      },
-    });
-    expect(capped.runtime?.stalled).toBeUndefined();
-    expect(capped.runtime?.lastErrorCode).toBe("consumption_cap");
-    expect(isThreadWorking(capped)).toBe(false);
-  });
-
-  it("presents a consumption cap hit as a usage_limit failure on the shell", () => {
-    const shell = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: RunId.make("run-consumption-cap"),
-      status: "completed",
-      consumptionCapHit: {
-        at: DateTime.formatIso(v2ThreadShell.updatedAt),
-        reason: "Thread API spend $0.75 reached $0.50 cap.",
-      },
-    });
-    expect(shell.runtime).toMatchObject({
-      status: "failed",
-      lastError: "Thread API spend $0.75 reached $0.50 cap.",
-      lastErrorClass: "usage_limit",
-      lastErrorCode: "consumption_cap",
-      usageLimitResetAt: null,
-    });
-  });
-
-  it("presents a first-turn cap hit before any run exists", () => {
-    const shell = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: null,
-      activeRunId: null,
-      activeProviderThreadId: null,
-      status: "idle",
-      consumptionCapHit: {
-        at: DateTime.formatIso(v2ThreadShell.updatedAt),
-        reason: "5h usage 90% reached 80% cap.",
-      },
-    });
-    expect(shell.runtime).toMatchObject({
-      status: "failed",
-      lastError: "5h usage 90% reached 80% cap.",
-      lastErrorClass: "usage_limit",
-      lastErrorCode: "consumption_cap",
-    });
   });
 
   it("moves a running thread with any question out of Working", () => {
@@ -274,23 +221,6 @@ describe("V2 client presentation", () => {
       status: "idle",
       lastError: "Usage limit reached",
       lastErrorClass: "usage_limit",
-    });
-
-    const capped = presentThreadShell(environmentId, {
-      ...v2ThreadShell,
-      latestRunId: RunId.make("run-capped"),
-      activeRunId: null,
-      status: "failed",
-      consumptionCapHit: {
-        at: "2026-06-20T01:05:00.000Z",
-        reason: "Token cap reached",
-      },
-      pendingBackgroundTasks: activeWorkflow,
-    });
-
-    expect(capped.runtime).toMatchObject({
-      status: "failed",
-      lastErrorCode: "consumption_cap",
     });
   });
 

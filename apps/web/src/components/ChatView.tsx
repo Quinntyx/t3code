@@ -91,7 +91,6 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   ProviderInteractionMode,
-  RunId,
   resolveEnvironmentMachineKind,
   resolveIdleCompaction,
   RuntimeMode,
@@ -1102,7 +1101,6 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadShell = serverThread;
   const limitRecoveryRun =
     serverRuntime?.status === "failed" &&
-    serverRuntime.lastErrorCode !== "consumption_cap" &&
     (serverRuntime.lastErrorClass === "usage_limit" ||
       serverRuntime.lastErrorCode === CHATGPT_USAGE_LIMIT_CODE ||
       serverRuntime.lastErrorCode === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE)
@@ -1119,8 +1117,6 @@ export default function ChatView(props: ChatViewProps) {
   const stalled = activeThreadShell?.runtime?.stalled === true;
   const timelineThreadError =
     (limitRecoveryRun !== null && visibleThreadError === serverRuntime?.lastError) ||
-    (activeThreadShell?.consumptionCapHit != null &&
-      visibleThreadError === serverRuntime?.lastError) ||
     (stalled && visibleThreadError === serverRuntime?.lastError)
       ? null
       : visibleThreadError;
@@ -2816,20 +2812,16 @@ export default function ChatView(props: ChatViewProps) {
           messages,
         )
       : null;
-  // A cap hit is written by a sweep, so it lands without a failed run to recover.
-  const consumptionCapHit = activeThreadShell?.consumptionCapHit ?? null;
   const limitRecoveryBanner = useUsageLimitRecoveryBannerItem(
-    (limitRecoveryRun !== null || consumptionCapHit !== null) && activeThreadShell !== null
+    limitRecoveryRun !== null && activeThreadShell !== null
       ? {
-          runId:
-            limitRecoveryRun?.runId ?? consumptionCapHit?.runId ?? RunId.make(activeThreadShell.id),
+          runId: limitRecoveryRun.runId,
           errorCode: serverRuntime?.lastErrorCode ?? null,
           resetAt: serverRuntime?.usageLimitResetAt ?? null,
-          stoppedAt: limitRecoveryRun?.completedAt ?? activeThreadShell.updatedAt,
+          stoppedAt: limitRecoveryRun.completedAt ?? activeThreadShell.updatedAt,
           settled: activeThreadShell.settledOverride === "settled",
           requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
           recovery: activeThreadShell.limitRecovery ?? null,
-          consumptionCapHit,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
           onChange: async (limitRecovery) => {
