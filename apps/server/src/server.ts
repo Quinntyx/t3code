@@ -945,7 +945,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
-    // Buddy art lives outside the app, in sources cloned through the configured providers.
+    // Buddy art lives outside the app, in configured local folders on this server.
     layerBuddySources,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,

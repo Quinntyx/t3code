@@ -1,9 +1,12 @@
+import { AuthSettingsWriteScope } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type Buddy } from "@t3tools/contracts/settings";
 import { T, useGT } from "gt-react";
 import { BanIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Suspense, useState, type ReactNode } from "react";
 
+import { useUpdateEnvironmentSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import { useEnvironmentScope } from "~/state/session";
 
 import { BuddyIdlePreview } from "../buddy/BuddyIdlePreview";
 import {
@@ -11,7 +14,7 @@ import {
   BUDDY_CHARACTER_IDS,
   type BuddyCharacter,
 } from "../buddy/buddyCharacters";
-import { useBuddyCatalog } from "../buddy/buddySources";
+import { useBuddyCatalog, useBuddyEnvironment } from "../buddy/buddySources";
 import { SettingResetButton, SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -23,13 +26,27 @@ export function BuddySection() {
   const searchableSetting = useSearchableSetting();
   const settings = useScopedSettings();
   const buddy = settings.buddy;
-  const updateSettings = useUpdateScopedSettings();
-  const select = (next: Buddy) => updateSettings({ buddy: next });
-  const repositoryUrls = settings.buddySources.map((source) => source.repositoryUrl);
-  const catalog = useBuddyCatalog(repositoryUrls);
+  const updateClientSettings = useUpdateScopedSettings();
+  const environment = useBuddyEnvironment();
+  const environmentId = environment?.environmentId ?? null;
+  const hasSettingsWriteScope = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const canEditFolders = environmentId !== null && hasSettingsWriteScope;
+  const updateEnvironmentSettings = useUpdateEnvironmentSettings(environmentId);
+  const select = (next: Buddy) => updateClientSettings({ buddy: next });
+  const folderPaths = environment?.serverConfig?.settings.buddyFolders ?? [];
+  const catalog = useBuddyCatalog(environmentId, folderPaths);
 
-  const setSources = (urls: ReadonlyArray<string>) =>
-    updateSettings({ buddySources: urls.map((repositoryUrl) => ({ repositoryUrl })) });
+  const setFolders = (nextFolders: ReadonlyArray<string>) => {
+    if (!canEditFolders) return;
+    updateEnvironmentSettings({ buddyFolders: [...nextFolders] });
+    if (
+      buddy !== "none" &&
+      !Object.hasOwn(BUDDY_CHARACTERS, buddy) &&
+      !nextFolders.some((folderPath) => buddy.startsWith(`${folderPath}|`))
+    ) {
+      select("none");
+    }
+  };
 
   return (
     <SettingsSection
@@ -85,7 +102,12 @@ export function BuddySection() {
             />
           ))}
         </div>
-        <BuddySources repositoryUrls={repositoryUrls} onChange={setSources} catalog={catalog} />
+        <BuddyFolders
+          folderPaths={folderPaths}
+          canEdit={canEditFolders}
+          onChange={setFolders}
+          catalog={catalog}
+        />
       </div>
     </SettingsSection>
   );
@@ -117,42 +139,47 @@ function BuddyChoice({
   );
 }
 
-function BuddySources({
-  repositoryUrls,
+function BuddyFolders({
+  folderPaths,
+  canEdit,
   onChange,
   catalog,
 }: {
-  repositoryUrls: ReadonlyArray<string>;
-  onChange: (urls: ReadonlyArray<string>) => void;
+  folderPaths: ReadonlyArray<string>;
+  canEdit: boolean;
+  onChange: (folders: ReadonlyArray<string>) => void;
   catalog: ReturnType<typeof useBuddyCatalog>;
 }) {
   const gt = useGT();
   const [draft, setDraft] = useState("");
   const add = () => {
-    const url = draft.trim();
-    if (url.length === 0 || repositoryUrls.includes(url)) return;
-    onChange([...repositoryUrls, url]);
+    const folder = draft.trim();
+    if (!canEdit || folder.length === 0 || folderPaths.includes(folder)) return;
+    onChange([...folderPaths, folder]);
     setDraft("");
   };
+
+  const catalogByPath = new Map(catalog.folders.map((entry) => [entry.folderPath, entry]));
 
   return (
     <div className="space-y-2 rounded-xl border border-border/70 bg-card/40 p-3">
       <div className="flex items-center justify-between gap-2">
         <div>
           <div className="text-sm font-medium text-foreground">
-            <T>Buddy sources</T>
+            <T>Buddy folders</T>
           </div>
           <div className="text-xs text-muted-foreground">
             <T>
-              Git repositories laid out with one folder per buddy. Cloned with your existing
-              connections and re-pulled on load.
+              Folders on disk holding buddy art. Point to a buddy folder with buddy.json, or a
+              parent folder with one subfolder per buddy.
             </T>
           </div>
         </div>
         <button
           type="button"
-          aria-label={gt("Reload buddy sources")}
-          className="cursor-pointer rounded-md p-1.5 text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          aria-label={gt("Reload buddy folders")}
+          disabled={folderPaths.length === 0}
+          className="cursor-pointer rounded-md p-1.5 text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           onClick={catalog.refresh}
         >
           <RefreshCwIcon className={cn("size-4", catalog.loading && "animate-spin")} />
@@ -160,9 +187,10 @@ function BuddySources({
       </div>
       <div className="flex gap-2">
         <input
-          aria-label={gt("Buddy source repository URL")}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          placeholder="https://git.example.com/you/buddy-arts.git"
+          aria-label={gt("Buddy folder path")}
+          disabled={!canEdit}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+          placeholder="~/buddies"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -173,45 +201,47 @@ function BuddySources({
         />
         <button
           type="button"
-          aria-label={gt("Add buddy source")}
-          className="cursor-pointer rounded-md border border-border px-2 py-1.5 text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          aria-label={gt("Add buddy folder")}
+          disabled={!canEdit || draft.trim().length === 0}
+          className="cursor-pointer rounded-md border border-border px-2 py-1.5 text-muted-foreground outline-none hover:bg-accent/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           onClick={add}
         >
           <PlusIcon className="size-4" />
         </button>
       </div>
-      {repositoryUrls.length === 0 ? (
+      {folderPaths.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          <T>No sources yet.</T>
+          <T>No folders yet.</T>
         </p>
       ) : (
         <ul className="space-y-1">
-          {catalog.sources.map((source) => (
-            <li
-              key={source.repositoryUrl}
-              className="flex items-center justify-between gap-2 text-xs"
-            >
-              <span className="min-w-0 flex-1 truncate text-foreground">
-                {source.repositoryUrl}
-                <span className="ml-2 text-muted-foreground">
-                  {source.error ??
-                    gt("{count, plural, one {{count} buddy} other {{count} buddies}}", {
-                      count: source.buddies.length,
-                    })}
+          {folderPaths.map((folderPath) => {
+            const entry = catalogByPath.get(folderPath);
+            return (
+              <li key={folderPath} className="flex items-center justify-between gap-2 text-xs">
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  {folderPath}
+                  {entry ? (
+                    <span className="ml-2 text-muted-foreground">
+                      {entry.error ??
+                        gt("{count, plural, one {{count} buddy} other {{count} buddies}}", {
+                          count: entry.buddies.length,
+                        })}
+                    </span>
+                  ) : null}
                 </span>
-              </span>
-              <button
-                type="button"
-                aria-label={gt("Remove buddy source {url}", { url: source.repositoryUrl })}
-                className="cursor-pointer rounded p-1 text-muted-foreground outline-none hover:bg-destructive/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                onClick={() =>
-                  onChange(repositoryUrls.filter((url) => url !== source.repositoryUrl))
-                }
-              >
-                <Trash2Icon className="size-3.5" />
-              </button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  aria-label={gt("Remove buddy folder {path}", { path: folderPath })}
+                  disabled={!canEdit}
+                  className="cursor-pointer rounded p-1 text-muted-foreground outline-none hover:bg-destructive/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => onChange(folderPaths.filter((path) => path !== folderPath))}
+                >
+                  <Trash2Icon className="size-3.5" />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

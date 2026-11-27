@@ -368,16 +368,10 @@ export type EffortDisplay = typeof EffortDisplay.Type;
 
 /**
  * The animated companion drawn above the app. `none` disables it, a bare id names
- * a bundled character, and `<source>/<id>` names one from a downloaded source.
+ * a bundled character, and `<folder>|<id>` names one loaded from a configured buddy folder.
  */
 export const Buddy = Schema.String;
 export type Buddy = typeof Buddy.Type;
-
-/** A git repository laid out as one folder per buddy, each holding `buddy.json`. */
-export const BuddySource = Schema.Struct({
-  repositoryUrl: TrimmedNonEmptyString,
-});
-export type BuddySource = typeof BuddySource.Type;
 
 export const ToolCallVisibility = Schema.Literals(["showAll", "hideSuccessful", "hideAll", "zen"]);
 export type ToolCallVisibility = typeof ToolCallVisibility.Type;
@@ -639,8 +633,6 @@ export const ClientSettingsSchema = Schema.Struct({
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   buddy: Buddy.pipe(Schema.withDecodingDefault(Effect.succeed("none"))),
-  // Repositories cloned on demand by the server; every one is pulled on load.
-  buddySources: Schema.Array(BuddySource).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1690,6 +1682,11 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
 
+  /** Folders on this server's disk holding buddy art (`buddy.json` directly or one subfolder per buddy). */
+  buddyFolders: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+
   /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
   usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
 });
@@ -2110,6 +2107,8 @@ export const ServerSettingsPatch = Schema.Struct({
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
   ),
+
+  buddyFolders: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
@@ -2267,6 +2266,5 @@ export const ClientSettingsPatch = Schema.Struct({
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
   buddy: Schema.optionalKey(Buddy),
-  buddySources: Schema.optionalKey(Schema.Array(BuddySource)),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

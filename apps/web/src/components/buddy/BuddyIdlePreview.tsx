@@ -18,7 +18,7 @@ function IdlePreviewClip({
   character: BuddyCharacter;
   height: number;
 }) {
-  const src = use(loadBuddyClip(url));
+  const src = use(loadBuddyClip(url, character.credentials));
   if (src === null) return null;
   return (
     <div

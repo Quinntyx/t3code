@@ -1,37 +1,50 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
-  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthSessionId,
+  DEFAULT_SERVER_SETTINGS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
+import * as Path from "effect/Path";
 import { HttpRouter } from "effect/http";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { SourceControlRepositoryService } from "../sourceControl/SourceControlRepositoryService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { layer } from "./buddySourceRoute.ts";
-
-const repositoryUrl = "https://example.com/buddies.git";
 
 const credentials = {
   missing: null,
   unscoped: [],
-  // `AuthOrchestrationWriteScope` does not exist in contracts; the read scope's write
-  // counterpart is `AuthOrchestrationOperateScope`, which sessions that may mutate receive.
   reader: [AuthOrchestrationReadScope],
-  writer: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
 } as const;
 
-it.effect.each(["reader", "writer", "missing", "unscoped"] as const)(
-  "buddy catalogs read for readers and refresh only for writers (%s)",
+const manifest = {
+  schemaVersion: 1,
+  id: "hero",
+  name: "Hero",
+  description: "A buddy",
+  author: "Tester",
+  license: "MIT",
+  aspectRatio: 1,
+  clips: { idle: "idle.webm" },
+};
+
+it.effect.each(["reader", "missing", "unscoped"] as const)(
+  "buddy catalog reads configured folders only for read-scoped callers (%s)",
   (credential) =>
     Effect.gen(function* () {
-      const clones = yield* Ref.make(0);
-      const discards = yield* Ref.make(0);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const folder = path.join(config.baseDir, "buddies");
+      yield* fs.makeDirectory(folder, { recursive: true });
+      yield* fs.writeFileString(path.join(folder, "buddy.json"), JSON.stringify(manifest));
+      yield* fs.writeFileString(path.join(folder, "idle.webm"), "webm-bytes");
+
       const scopes = credentials[credential];
       const auth = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
         authenticateWebSocketUpgrade: () =>
@@ -44,21 +57,15 @@ it.effect.each(["reader", "writer", "missing", "unscoped"] as const)(
                 scopes,
               }),
       });
-      const repositories = Layer.mock(SourceControlRepositoryService, {
-        cloneRepository: (input) =>
-          Ref.update(clones, (count) => count + 1).pipe(
-            Effect.as({
-              cwd: input.destinationPath,
-              remoteUrl: input.remoteUrl ?? repositoryUrl,
-              repository: null,
-            }),
-          ),
-        discardClone: () => Ref.update(discards, (count) => count + 1),
+      const settingsLayer = Layer.mock(ServerSettings.ServerSettingsService, {
+        getSettings: Effect.succeed({
+          ...DEFAULT_SERVER_SETTINGS,
+          buddyFolders: [folder],
+        }),
       });
       const routes = layer.pipe(
         Layer.provideMerge(auth),
-        Layer.provideMerge(repositories),
-        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-buddy-route-" })),
+        Layer.provideMerge(settingsLayer),
         Layer.provideMerge(NodeServices.layer),
       );
       const server = yield* Effect.acquireRelease(
@@ -66,46 +73,47 @@ it.effect.each(["reader", "writer", "missing", "unscoped"] as const)(
         (handler) => Effect.promise(() => handler.dispose()),
       );
 
-      const catalogPath = `/api/buddies/catalog?source=${encodeURIComponent(repositoryUrl)}&refresh=1`;
-      const send = (method: "GET" | "POST") =>
-        Effect.promise(() =>
-          server.handler(
-            new Request(`http://localhost${catalogPath}`, {
-              method,
-              headers: { host: "example.com", "x-forwarded-proto": "https" },
-            }),
-          ),
-        );
-      const body = (response: Response) =>
-        Effect.promise(
-          () => response.json() as Promise<{ sources: ReadonlyArray<{ error: string | null }> }>,
-        );
-
-      const read = yield* send("GET");
-      expect(read.status).toBe(
+      const response = yield* Effect.promise(() =>
+        server.handler(
+          new Request("http://localhost/api/buddies/catalog", {
+            headers: { host: "example.com", "x-forwarded-proto": "https" },
+          }),
+        ),
+      );
+      expect(response.status).toBe(
         credential === "missing" ? 401 : credential === "unscoped" ? 403 : 200,
       );
-      if (read.status === 200) {
-        // A GET never clones, refreshes, or deletes; it reports the missing checkout.
-        expect((yield* body(read)).sources[0]?.error).not.toBeNull();
-        expect(read.headers.get("cache-control")).toBe("private, no-store");
+      if (response.status === 200) {
+        const body = (yield* Effect.promise(() => response.json())) as {
+          folders: ReadonlyArray<{ folderPath: string; buddies: ReadonlyArray<{ id: string }> }>;
+        };
+        expect(body.folders).toHaveLength(1);
+        expect(body.folders[0]?.folderPath).toBe(folder);
+        expect(body.folders[0]?.buddies.map((buddy) => buddy.id)).toEqual(["hero"]);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
       }
-
-      const write = yield* send("POST");
-      expect(write.status).toBe(
-        credential === "writer" ? 200 : credential === "missing" ? 401 : 403,
-      );
-      if (write.status === 200) {
-        expect((yield* body(write)).sources[0]?.error).toBeNull();
-      }
-
-      expect(yield* Ref.get(clones)).toBe(credential === "writer" ? 1 : 0);
-      expect(yield* Ref.get(discards)).toBe(0);
-    }),
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-buddy-route-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
 );
 
-it.effect("serves buddy clips only to read-scoped media requests", () =>
+it.effect("serves clips only from server-configured folders", () =>
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const allowed = path.join(config.baseDir, "allowed");
+    const unconfigured = path.join(config.baseDir, "unconfigured");
+    for (const dir of [allowed, unconfigured]) {
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(path.join(dir, "buddy.json"), JSON.stringify(manifest));
+      yield* fs.writeFileString(path.join(dir, "idle.webm"), "webm-bytes");
+    }
+
     const auth = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
       authenticateWebSocketUpgrade: () =>
         Effect.succeed({
@@ -115,23 +123,57 @@ it.effect("serves buddy clips only to read-scoped media requests", () =>
           scopes: [AuthOrchestrationReadScope],
         }),
     });
+    const settingsLayer = Layer.mock(ServerSettings.ServerSettingsService, {
+      getSettings: Effect.succeed({
+        ...DEFAULT_SERVER_SETTINGS,
+        buddyFolders: [allowed],
+      }),
+    });
     const routes = layer.pipe(
       Layer.provideMerge(auth),
-      Layer.provideMerge(Layer.mock(SourceControlRepositoryService, {})),
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-buddy-route-" })),
+      Layer.provideMerge(settingsLayer),
       Layer.provideMerge(NodeServices.layer),
     );
     const server = yield* Effect.acquireRelease(
       Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
       (handler) => Effect.promise(() => handler.dispose()),
     );
-    const response = yield* Effect.promise(() =>
+
+    const missingParams = yield* Effect.promise(() =>
       server.handler(
         new Request("http://localhost/api/buddies/clip", {
           headers: { host: "example.com", "x-forwarded-proto": "https" },
         }),
       ),
     );
-    expect(response.status).toBe(400);
-  }),
+    expect(missingParams.status).toBe(400);
+
+    const okClip = yield* Effect.promise(() =>
+      server.handler(
+        new Request(
+          `http://localhost/api/buddies/clip?folder=${encodeURIComponent(allowed)}&buddy=hero&file=idle.webm`,
+          { headers: { host: "example.com", "x-forwarded-proto": "https" } },
+        ),
+      ),
+    );
+    expect(okClip.status).toBe(200);
+    expect(okClip.headers.get("content-type")).toBe("video/webm");
+    expect(yield* Effect.promise(() => okClip.text())).toBe("webm-bytes");
+
+    const blockedClip = yield* Effect.promise(() =>
+      server.handler(
+        new Request(
+          `http://localhost/api/buddies/clip?folder=${encodeURIComponent(unconfigured)}&buddy=hero&file=idle.webm`,
+          { headers: { host: "example.com", "x-forwarded-proto": "https" } },
+        ),
+      ),
+    );
+    expect(blockedClip.status).toBe(404);
+  }).pipe(
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-buddy-route-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
 );

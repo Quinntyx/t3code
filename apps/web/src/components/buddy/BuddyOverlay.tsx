@@ -38,7 +38,7 @@ import {
   resolveBuddyClip,
   type BuddyCharacter,
 } from "./buddyCharacters";
-import { useBuddyCatalog } from "./buddySources";
+import { useBuddyCatalog, useBuddyEnvironment } from "./buddySources";
 
 const BUDDY_WIDTH_PX = 120;
 // Clips are hard swaps, so quick activity changes would otherwise flicker between them.
@@ -51,10 +51,14 @@ const DEFAULT_BUDDY_POSITION: BuddyPosition = { x: 0.98, y: 0.8 };
 
 export function BuddyHost() {
   const buddy = useClientSettings((settings) => settings.buddy);
-  const sources = useClientSettings((settings) => settings.buddySources);
-  const catalog = useBuddyCatalog(sources.map((source) => source.repositoryUrl));
+  const environment = useBuddyEnvironment();
+  const folderPaths = environment?.serverConfig?.settings.buddyFolders ?? [];
+  const needsCustomBuddy = buddy !== "none" && !isBuddyCharacterId(buddy);
+  const catalog = useBuddyCatalog(environment?.environmentId ?? null, folderPaths, {
+    enabled: needsCustomBuddy,
+  });
   if (buddy === "none") return null;
-  // A downloaded buddy resolves once its source has been read.
+  // A folder-loaded buddy resolves once its folder has been read.
   const character = isBuddyCharacterId(buddy)
     ? BUDDY_CHARACTERS[buddy]
     : catalog.characters.get(buddy);
@@ -99,7 +103,7 @@ function useBuddyClips(character: BuddyCharacter) {
       for (const name of clipLoadOrder(character)) {
         const url = character.clips[name];
         if (url === undefined) continue;
-        const objectUrl = await loadBuddyClip(url);
+        const objectUrl = await loadBuddyClip(url, character.credentials);
         if (cancelled) return;
         if (objectUrl !== null) setUrls((previous) => ({ ...previous, [name]: objectUrl }));
       }

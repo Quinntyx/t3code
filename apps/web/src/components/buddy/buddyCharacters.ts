@@ -21,6 +21,8 @@ export interface BuddyCharacter {
   /** Only the slots this character has art for; `resolveBuddyClip` fills the rest. */
   readonly clips: Partial<Record<BuddyAnimation, string>>;
   readonly aspectRatio: number;
+  /** True when clip fetches need session cookies against the serving environment. */
+  readonly credentials?: boolean;
 }
 
 /**
@@ -65,6 +67,7 @@ export function resolveBuddyClip(
 export function buddyCharacterFrom(
   manifest: BuddyManifest,
   clipUrl: (file: string) => string,
+  options?: { readonly credentials?: boolean },
 ): BuddyCharacter {
   const clips: Partial<Record<BuddyAnimation, string>> = {};
   for (const slot of BUDDY_ANIMATIONS) {
@@ -78,6 +81,7 @@ export function buddyCharacterFrom(
     license: manifest.license,
     clips,
     aspectRatio: manifest.aspectRatio,
+    ...(options?.credentials ? { credentials: true } : {}),
   };
 }
 
@@ -127,10 +131,11 @@ const clipObjectUrls = new Map<string, Promise<string | null>>();
  * and without them a looping or rewound video cannot seek back to its start.
  * Copies are kept for the session, so the overlay and settings share them.
  */
-export function loadBuddyClip(url: string): Promise<string | null> {
-  let objectUrl = clipObjectUrls.get(url);
+export function loadBuddyClip(url: string, credentials = false): Promise<string | null> {
+  const cacheKey = `${credentials ? "1" : "0"}:${url}`;
+  let objectUrl = clipObjectUrls.get(cacheKey);
   if (objectUrl === undefined) {
-    objectUrl = fetch(url)
+    objectUrl = fetch(url, { credentials: credentials ? "include" : "same-origin" })
       .then((response) => {
         if (!response.ok) throw new Error(`Buddy clip ${url} failed with ${response.status}.`);
         return response.blob();
@@ -138,10 +143,10 @@ export function loadBuddyClip(url: string): Promise<string | null> {
       .then((blob) => URL.createObjectURL(blob))
       .catch((error: unknown) => {
         console.error("[BUDDY] Could not load clip.", error);
-        clipObjectUrls.delete(url);
+        clipObjectUrls.delete(cacheKey);
         return null;
       });
-    clipObjectUrls.set(url, objectUrl);
+    clipObjectUrls.set(cacheKey, objectUrl);
   }
   return objectUrl;
 }

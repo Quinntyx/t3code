@@ -1,20 +1,16 @@
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest inside the pure source slug.
-import * as NodeCrypto from "node:crypto";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
-
-import * as ServerConfig from "../config.ts";
-import { SourceControlRepositoryService } from "../sourceControl/SourceControlRepositoryService.ts";
 
 class BuddySourceError extends Schema.TaggedError<BuddySourceError>()("BuddySourceError", {
   message: Schema.String,
 }) {}
 
-/** One buddy folder in a source repository. */
+/** One buddy folder on disk. */
 export interface BuddyManifest {
   readonly id: string;
   readonly name: string;
@@ -27,11 +23,16 @@ export interface BuddyManifest {
   readonly clips: Readonly<Record<string, string>>;
 }
 
-export interface BuddySourceCatalogEntry {
-  readonly repositoryUrl: string;
+export interface BuddyFolderCatalogEntry {
+  readonly folderPath: string;
   readonly buddies: ReadonlyArray<BuddyManifest>;
-  /** Why this source could not be read, so one bad source does not hide the rest. */
+  /** Why this folder could not be read, so one bad folder does not hide the rest. */
   readonly error: string | null;
+}
+
+interface ScannedBuddy {
+  readonly manifest: BuddyManifest;
+  readonly directory: string;
 }
 
 const BuddyManifestJson = Schema.Struct({
@@ -49,65 +50,6 @@ const decodeBuddyManifest = Schema.decodeUnknownOption(BuddyManifestJson);
 
 const MANIFEST_FILE = "buddy.json";
 const CLIP_SUFFIX = ".webm";
-const SOURCE_SLUG_PREFIX_LIMIT = 40;
-
-const SAFE_HOST = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
-const SCP_LIKE_URL = /^[A-Za-z0-9._-]+@([A-Za-z0-9._-]+):(.+)$/;
-
-const isSafeHost = (host: string): boolean =>
-  host.length > 0 &&
-  !host.includes("..") &&
-  (SAFE_HOST.test(host) || /^\[[0-9a-fA-F:.]+\]$/.test(host));
-
-const isSafeRepositoryPath = (value: string): boolean => {
-  const segments = value.replace(/^\/+/, "").split("/");
-  if (segments.some((segment) => segment === ".." || segment.includes("\\"))) return false;
-  return segments.some((segment) => segment.length > 0 && segment !== ".");
-};
-
-/**
- * Only remote URLs the clone provider understands may name a checkout directory.
- * Options, local paths, and traversal fragments are rejected before any filesystem use.
- */
-export const isSupportedRepositoryUrl = (repositoryUrl: string): boolean => {
-  if (repositoryUrl.length === 0 || repositoryUrl.length > 2048) return false;
-  if (repositoryUrl.startsWith("-")) return false;
-  if (/[\s\p{Cc}]/u.test(repositoryUrl)) return false;
-  if (/^file:/i.test(repositoryUrl)) return false;
-  if (/(?:^|[/:])\.\.(?:$|[/:])/.test(repositoryUrl)) return false;
-
-  const scpLike = SCP_LIKE_URL.exec(repositoryUrl);
-  if (scpLike !== null) {
-    return isSafeHost(scpLike[1]!) && isSafeRepositoryPath(scpLike[2]!);
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(repositoryUrl);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:" && parsed.protocol !== "ssh:") {
-    return false;
-  }
-  return isSafeHost(parsed.hostname) && isSafeRepositoryPath(parsed.pathname);
-};
-
-/**
- * A readable, collision-free directory name. The hash suffix keeps the result non-empty and
- * never `.` or `..`, even for a URL whose readable part sanitizes away to nothing.
- */
-export const sourceSlug = (repositoryUrl: string): string => {
-  const readable = repositoryUrl
-    .replace(/^[a-z+]+:\/\//i, "")
-    .replace(/\.git$/i, "")
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^[.-]+|[.-]+$/g, "")
-    .slice(0, SOURCE_SLUG_PREFIX_LIMIT)
-    .replace(/[.-]+$/g, "");
-  const digest = NodeCrypto.createHash("sha256").update(repositoryUrl).digest("hex").slice(0, 12);
-  return `${readable.length === 0 ? "source" : readable}-${digest}`;
-};
 
 const isPlainSegment = (value: string): boolean =>
   value.length > 0 &&
@@ -116,6 +58,11 @@ const isPlainSegment = (value: string): boolean =>
   !value.includes("/") &&
   !value.includes("\\") &&
   !value.includes("\0");
+
+const isInsideDirectory = (parent: string, target: string, sep: string): boolean => {
+  const prefix = parent.endsWith(sep) ? parent : `${parent}${sep}`;
+  return target.startsWith(prefix);
+};
 
 const parseBuddyManifest = (raw: string): BuddyManifest | null => {
   let parsed: unknown;
@@ -152,154 +99,137 @@ const realPathOrNull = Effect.fnUntraced(function* (target: string) {
   return yield* fs.realPath(target).pipe(Effect.orElseSucceed((): string | null => null));
 });
 
-const checkoutDir = Effect.fn("buddySources.checkoutDir")(function* (repositoryUrl: string) {
-  if (!isSupportedRepositoryUrl(repositoryUrl)) return null;
-  const config = yield* ServerConfig.ServerConfig;
-  const path = yield* Path.Path;
-  const root = path.resolve(config.baseDir, "userdata", "buddy-sources");
-  const destination = path.resolve(root, sourceSlug(repositoryUrl));
-  return destination.startsWith(`${root}${path.sep}`) ? destination : null;
-});
-
-const readManifests = Effect.fn("buddySources.readManifests")(function* (directory: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const realDirectory = yield* realPathOrNull(directory);
-  if (realDirectory === null) return [];
-  const entries = yield* fs
-    .readDirectory(directory)
-    .pipe(Effect.orElseSucceed((): Array<string> => []));
-  const manifests: Array<BuddyManifest> = [];
-  for (const entry of entries.toSorted()) {
-    if (!isPlainSegment(entry)) continue;
-    const manifestPath = path.join(directory, entry, MANIFEST_FILE);
-    const realManifestPath = yield* realPathOrNull(manifestPath);
-    if (realManifestPath === null) continue;
-    if (!realManifestPath.startsWith(`${realDirectory}${path.sep}`)) {
-      yield* Effect.logWarning("ignoring buddy manifest outside its source checkout", {
-        path: manifestPath,
-      });
-      continue;
-    }
-    const raw = yield* fs
-      .readFileString(realManifestPath)
-      .pipe(Effect.orElseSucceed((): string | null => null));
-    if (raw === null) continue;
-    const manifest = parseBuddyManifest(raw);
-    if (manifest === null) {
-      yield* Effect.logWarning("ignoring unusable buddy manifest", { path: manifestPath });
-      continue;
-    }
-    manifests.push(manifest);
-  }
-  return manifests;
-});
-
-const readPresentCheckout = Effect.fn("buddySources.presentCheckout")(function* (
-  repositoryUrl: string,
+const resolveConfiguredFolder = Effect.fn("buddySources.resolveFolder")(function* (
+  folderPath: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const destination = yield* checkoutDir(repositoryUrl);
-  const present =
-    destination !== null && (yield* fs.exists(destination).pipe(Effect.orElseSucceed(() => false)));
-  if (destination === null || !present) {
-    return yield* new BuddySourceError({ message: "Buddy source is not downloaded." });
+  const trimmed = folderPath.trim();
+  if (trimmed.length === 0 || trimmed.includes("\0")) {
+    return yield* new BuddySourceError({ message: "Folder path is empty or invalid." });
   }
-  return destination;
-});
-
-const ensureCheckout = Effect.fn("buddySources.ensureCheckout")(function* (
-  repositoryUrl: string,
-  refresh: boolean,
-) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const repositories = yield* SourceControlRepositoryService;
-  const destination = yield* checkoutDir(repositoryUrl);
-  if (destination === null) {
-    return yield* new BuddySourceError({ message: "Unsupported buddy source URL." });
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  const expanded = path.resolve(expandHomePath(trimmed, homeDirectory));
+  const realFolder = yield* realPathOrNull(expanded);
+  if (realFolder === null) {
+    return yield* new BuddySourceError({ message: `Folder not found: ${folderPath}` });
   }
-  const present = yield* fs.exists(destination).pipe(Effect.orElseSucceed(() => false));
-  if (present && !refresh) return destination;
+  const info = yield* fs.stat(realFolder).pipe(Effect.orElseSucceed(() => null));
+  if (info?.type !== "Directory") {
+    return yield* new BuddySourceError({ message: `Path is not a folder: ${folderPath}` });
+  }
+  return realFolder;
+});
 
-  if (!present) {
-    yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
-    // Cloning goes through the configured provider, so existing credentials apply.
-    yield* repositories.cloneRepository({
-      remoteUrl: repositoryUrl,
-      destinationPath: destination,
+const readManifestAt = Effect.fnUntraced(function* (realFolder: string, candidateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const manifestPath = path.join(candidateDir, MANIFEST_FILE);
+  const realManifestPath = yield* realPathOrNull(manifestPath);
+  if (realManifestPath === null) return null;
+  if (!isInsideDirectory(realFolder, realManifestPath, path.sep)) {
+    yield* Effect.logWarning("ignoring buddy manifest outside its configured folder", {
+      path: manifestPath,
     });
-    return destination;
+    return null;
   }
-
-  // Refresh beside the live copy: a failed clone must not leave the source empty.
-  const staging = `${destination}.incoming`;
-  yield* fs.remove(staging, { recursive: true, force: true }).pipe(Effect.ignore);
-  yield* repositories.cloneRepository({ remoteUrl: repositoryUrl, destinationPath: staging });
-  yield* repositories.discardClone(destination);
-  yield* fs.rename(staging, destination);
-  return destination;
+  const realBuddyDir = path.dirname(realManifestPath);
+  if (realBuddyDir !== realFolder && !isInsideDirectory(realFolder, realBuddyDir, path.sep)) {
+    return null;
+  }
+  const raw = yield* fs
+    .readFileString(realManifestPath)
+    .pipe(Effect.orElseSucceed((): string | null => null));
+  if (raw === null) return null;
+  const manifest = parseBuddyManifest(raw);
+  if (manifest === null) {
+    yield* Effect.logWarning("ignoring unusable buddy manifest", { path: manifestPath });
+    return null;
+  }
+  return { manifest, directory: realBuddyDir } satisfies ScannedBuddy;
 });
-
-export interface BuddyCatalogOptions {
-  /** Clone missing sources and re-clone present ones. Read-only callers leave this off. */
-  readonly sync?: boolean;
-  readonly refresh?: boolean;
-  /** Shared across requests by the route layer; a fresh one is fine for one-off calls. */
-  readonly lock?: Semaphore.Semaphore;
-}
 
 /**
- * Reads each configured source. `sync` runs the clone provider first; without it this only
- * reads checkouts that already exist, so a GET never writes to the filesystem.
+ * Scans a configured folder for buddies. Supports both a single buddy folder containing
+ * `buddy.json` directly and a collection folder containing one subfolder per buddy.
  */
+const scanBuddyFolder = Effect.fn("buddySources.scanFolder")(function* (folderPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const realFolder = yield* resolveConfiguredFolder(folderPath);
+  const discovered: Array<ScannedBuddy> = [];
+  const seenIds = new Set<string>();
+
+  const addIfUnique = (entry: ScannedBuddy | null) => {
+    if (entry === null || seenIds.has(entry.manifest.id)) return;
+    seenIds.add(entry.manifest.id);
+    discovered.push(entry);
+  };
+
+  addIfUnique(yield* readManifestAt(realFolder, realFolder));
+
+  const entries = yield* fs
+    .readDirectory(realFolder)
+    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  for (const entry of entries.toSorted()) {
+    if (!isPlainSegment(entry)) continue;
+    addIfUnique(yield* readManifestAt(realFolder, path.join(realFolder, entry)));
+  }
+
+  return { realFolder, buddies: discovered };
+});
+
+/** Reads every configured buddy folder from disk without mutating anything. */
 export const buddyCatalogEntries = Effect.fn("buddySources.catalog")(function* (
-  repositoryUrls: ReadonlyArray<string>,
-  options?: BuddyCatalogOptions,
+  folderPaths: ReadonlyArray<string>,
 ) {
-  const entries: Array<BuddySourceCatalogEntry> = [];
-  if (repositoryUrls.length === 0) return entries;
-  const lock = options?.lock ?? (yield* Semaphore.make(1));
-  // Sequential keeps clone progress and disk use predictable on first run.
-  for (const repositoryUrl of repositoryUrls) {
-    const load = options?.sync
-      ? ensureCheckout(repositoryUrl, options.refresh ?? false)
-      : readPresentCheckout(repositoryUrl);
-    const settled = yield* load.pipe(
-      Effect.flatMap(readManifests),
-      Effect.map((buddies): BuddySourceCatalogEntry => ({ repositoryUrl, buddies, error: null })),
+  const entries: Array<BuddyFolderCatalogEntry> = [];
+  for (const folderPath of folderPaths) {
+    const settled = yield* scanBuddyFolder(folderPath).pipe(
+      Effect.map(({ buddies }): BuddyFolderCatalogEntry => ({
+        folderPath,
+        buddies: buddies.map((entry) => entry.manifest),
+        error: null,
+      })),
       Effect.catch((error) =>
-        Effect.logWarning("buddy source unavailable", { repositoryUrl, cause: error }).pipe(
-          Effect.as<BuddySourceCatalogEntry>({
-            repositoryUrl,
+        Effect.logWarning("buddy folder unavailable", { folderPath, cause: error }).pipe(
+          Effect.as<BuddyFolderCatalogEntry>({
+            folderPath,
             buddies: [],
-            error: `Could not read ${repositoryUrl}.`,
+            error: error.message,
           }),
         ),
       ),
-      lock.withPermits(1),
     );
     entries.push(settled);
   }
   return entries;
 });
 
-/** Resolves one clip, or null when it is not a clip this source ships. */
+/**
+ * Resolves one declared clip from a configured buddy folder, or null when the folder is not
+ * configured, the buddy/clip is not declared in its manifest, or a symlink escapes the folder.
+ */
 export const buddyClipPath = Effect.fn("buddySources.clipPath")(function* (input: {
-  readonly repositoryUrl: string;
+  readonly configuredFolders: ReadonlyArray<string>;
+  readonly folderPath: string;
   readonly buddyId: string;
   readonly file: string;
 }) {
+  if (!input.configuredFolders.includes(input.folderPath)) return null;
   if (!isPlainSegment(input.buddyId) || !isPlainSegment(input.file)) return null;
   if (!input.file.endsWith(CLIP_SUFFIX)) return null;
   const path = yield* Path.Path;
-  const directory = yield* checkoutDir(input.repositoryUrl);
-  if (directory === null) return null;
-  // A cloned repository can contain symlinks; only real paths inside the checkout are served.
-  const realDirectory = yield* realPathOrNull(directory);
-  if (realDirectory === null) return null;
-  const filePath = path.join(directory, input.buddyId, input.file);
+  const scanned = yield* scanBuddyFolder(input.folderPath).pipe(Effect.orElseSucceed(() => null));
+  if (scanned === null) return null;
+  const match = scanned.buddies.find((entry) => entry.manifest.id === input.buddyId);
+  if (match === undefined) return null;
+  if (!Object.values(match.manifest.clips).includes(input.file)) return null;
+  const filePath = path.join(match.directory, input.file);
   const realFilePath = yield* realPathOrNull(filePath);
   if (realFilePath === null) return null;
-  return realFilePath.startsWith(`${realDirectory}${path.sep}`) ? realFilePath : null;
+  return isInsideDirectory(match.directory, realFilePath, path.sep) &&
+    isInsideDirectory(scanned.realFolder, realFilePath, path.sep)
+    ? realFilePath
+    : null;
 });
