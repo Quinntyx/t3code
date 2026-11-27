@@ -18,15 +18,7 @@ import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-gro
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import {
-  use,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-} from "react";
+import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
   ScrollView,
@@ -49,7 +41,11 @@ import {
 } from "../../lib/layout";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { FloatingActionButton } from "../../components/ui/FloatingActionButton";
-import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
+import {
+  isWorkspaceEnvironmentUnavailable,
+  type WorkspaceEnvironment,
+  type WorkspaceState,
+} from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
@@ -100,10 +96,11 @@ import {
 import { createSwipeRowActivation } from "./swipe-row-activation";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
 import { useFabScroll } from "./FabScrollContext";
-import { holdLaunchSplashForHomeRows, settleLaunchSplashHomeRows } from "./home-launch-splash";
+import { ThreadListSkeleton } from "../threads/ThreadListSkeleton";
+import { shouldShowThreadListSkeleton } from "../threads/thread-list-skeleton-state";
 import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { ThreadListFilters } from "./ThreadListFilters";
-import { deriveHomeEmptyState } from "./home-empty-state";
+import { deriveHomeEmptyState, type HomeEmptyState } from "./home-empty-state";
 import { useHiddenThreads } from "./use-hidden-threads";
 
 interface HomeScreenProps {
@@ -119,7 +116,10 @@ interface HomeScreenProps {
   >;
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedEnvironmentUnavailable: Omit<HomeEmptyState, "showsAddEnvironment"> | null;
   readonly selectedProjectKey: string | null;
+  readonly freshEnvironmentIds: ReadonlySet<EnvironmentId>;
+  readonly syncingEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
@@ -427,6 +427,7 @@ export function HomeScreen(props: HomeScreenProps) {
     projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
+    freshEnvironmentIds: props.freshEnvironmentIds,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -621,18 +622,68 @@ export function HomeScreen(props: HomeScreenProps) {
     props.threads.some((thread) => thread.archivedAt === null) ||
     props.pendingTasks.length > 0 ||
     threadListV2Layout.settledCount > 0;
-  // A hidden list gets no layout, so it never reports its rows as laid out.
-  const hasRowsToLayOut = props.visible && hasAnyThreads && threadListV2Items.length > 0;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the native launch splash, which is outside React, until the rows are gone or this list unmounts; a layout effect runs before the splash hides in this commit
-  useLayoutEffect(() => {
-    return hasRowsToLayOut ? holdLaunchSplashForHomeRows() : undefined;
-  }, [hasRowsToLayOut]);
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
       ? null
       : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
         "this environment");
-  const emptyState = deriveHomeEmptyState(props.catalogState, props.projects.length, m);
+  const showsSkeleton = shouldShowThreadListSkeleton({
+    isLoadingConnections: props.catalogState.isLoadingConnections,
+    hasConnections: props.catalogState.hasConnections,
+    networkStatus: props.catalogState.networkStatus,
+    selectedEnvironmentId: props.selectedEnvironmentId,
+    projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
+    syncingEnvironmentIds: props.syncingEnvironmentIds,
+    hasVisibleRows: threadListV2Items.length > 0,
+  });
+  const emptyState = props.selectedEnvironmentUnavailable
+    ? {
+        ...props.selectedEnvironmentUnavailable,
+        showsAddEnvironment:
+          !props.selectedEnvironmentUnavailable.loading && !props.catalogState.hasReadyEnvironment,
+      }
+    : isWorkspaceEnvironmentUnavailable(props.catalogState)
+      ? deriveHomeEmptyState(props.catalogState, props.projects.length, m)
+      : !props.catalogState.isLoadingConnections &&
+          props.catalogState.hasConnections &&
+          v2ScopedProjectGroup !== null
+        ? {
+            title: gt("No threads in {name}", { name: v2ScopedProjectGroup.title }),
+            detail: gt("Choose another project or create a new task."),
+            loading: false,
+            showsAddEnvironment: false,
+          }
+        : !props.catalogState.isLoadingConnections &&
+            props.catalogState.hasConnections &&
+            selectedEnvironmentLabel !== null
+          ? {
+              title: gt("No threads in {name}", { name: selectedEnvironmentLabel }),
+              detail: gt("Choose another environment or create a new task."),
+              loading: false,
+              showsAddEnvironment: false,
+            }
+          : deriveHomeEmptyState(props.catalogState, props.projects.length, m);
+
+  if (showsSkeleton) {
+    return (
+      <View className={containerClassName}>
+        <ScreenContent surface={sidebarSurface ? "drawer" : "screen"}>
+          <View className={cn("flex-1", Platform.OS !== "android" && contentBackground)}>
+            <ThreadListSkeleton
+              variant={sidebarSurface ? "sidebar" : "home"}
+              style={{
+                paddingTop: Platform.OS === "ios" ? contentTopInset : 16,
+                paddingLeft:
+                  (contentSideInsets?.left ?? 0) + (sidebarSurface ? 8 : 0) + androidListGutter,
+                paddingRight:
+                  (contentSideInsets?.right ?? 0) + (sidebarSurface ? 8 : 0) + androidListGutter,
+              }}
+            />
+          </View>
+        </ScreenContent>
+      </View>
+    );
+  }
 
   if (!hasAnyThreads) {
     return (
@@ -712,7 +763,20 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const v2ListEmpty =
-    hasSearchQuery && threadSearch.isPending ? (
+    props.selectedEnvironmentUnavailable !== null ? (
+      <View className="w-full max-w-[430px] items-center">
+        <EmptyState
+          title={props.selectedEnvironmentUnavailable.title}
+          detail={props.selectedEnvironmentUnavailable.detail}
+          variant={Platform.OS === "android" ? "plain" : undefined}
+        />
+        {props.selectedEnvironmentUnavailable.loading ? (
+          <View className="mt-4 items-center">
+            <AppActivityIndicator colorClassName="accent-icon-muted" />
+          </View>
+        ) : null}
+      </View>
+    ) : hasSearchQuery && threadSearch.isPending ? (
       <EmptyState
         title={gt("Searching thread messages…")}
         detail={gt('Looking for "{query}" in messages.', { query: props.searchQuery })}
@@ -781,7 +845,6 @@ export function HomeScreen(props: HomeScreenProps) {
                 itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
                 ref={listRef}
                 onLoad={() => {
-                  settleLaunchSplashHomeRows();
                   activateVisibleRows(threadListV2Items);
                 }}
                 onTouchStart={(event) => trackListTouches(event, true)}

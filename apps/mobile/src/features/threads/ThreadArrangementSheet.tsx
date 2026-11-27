@@ -19,7 +19,12 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { deriveThreadArrangementSizing } from "../../lib/layout";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
-import { steadyNavigationThreadShellsAtom, steadyShellsHoldingAtom } from "../../state/threads";
+import {
+  steadyFreshEnvironmentIdsAtom,
+  steadyNavigationThreadShellsAtom,
+  steadyShellsHoldingAtom,
+} from "../../state/threads";
+import { filterFreshThreads } from "./thread-list-skeleton-state";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import {
@@ -183,7 +188,11 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
     baseFontSize: appearance.baseFontSize,
     fontScale,
   });
-  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
+  const freshEnvironmentIds = useAtomValue(steadyFreshEnvironmentIdsAtom);
+  const threads = filterFreshThreads(
+    useAtomValue(steadyNavigationThreadShellsAtom),
+    freshEnvironmentIds,
+  );
   const configs = useAtomValue(environmentServerConfigsAtom);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
@@ -199,7 +208,9 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
   );
   // Older settled threads load in pages, as in the thread list.
   const olderSettledShelf = useOlderSettledShelf({
-    scopes: [...configs.keys()].map((environmentId) => ({ environmentId, projectIds: null })),
+    scopes: [...configs.keys()]
+      .filter((environmentId) => freshEnvironmentIds.has(environmentId))
+      .map((environmentId) => ({ environmentId, projectIds: null })),
     expanded: expanded.settled,
     visibleCount: settledVisibleCount,
   });

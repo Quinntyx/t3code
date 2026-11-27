@@ -23,7 +23,7 @@ function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): boolean {
 function workspaceConnectionStatusLabel(state: WorkspaceState, resolve: MessageResolver): string {
   if (state.networkStatus === "offline") return resolve(msg("You are offline"));
   if (state.hasReadyEnvironment && state.hasSyncingConnectedEnvironment) {
-    return state.hasLoadedShellSnapshot
+    return state.hasFreshShellSnapshot
       ? resolve(msg("Syncing threads..."))
       : resolve(msg("Loading threads..."));
   }
@@ -45,7 +45,7 @@ function workspaceConnectionStatusLabel(state: WorkspaceState, resolve: MessageR
   const connectionError = runtimeConnectionErrorText(state, resolve);
   if (connectionError !== null) return connectionError;
   if (state.hasPendingShellSnapshot) {
-    return state.hasLoadedShellSnapshot
+    return state.hasFreshShellSnapshot
       ? resolve(msg("Syncing threads..."))
       : resolve(msg("Loading threads..."));
   }

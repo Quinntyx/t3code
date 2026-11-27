@@ -10,9 +10,10 @@ import {
   useAppearancePreferences,
   useAndroidFloatingTabs,
 } from "../settings/appearance/AppearancePreferencesProvider";
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
+import {
+  shellErrorText,
+  type EnvironmentProject,
+  type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -29,7 +30,21 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects } from "../../state/entities";
-import { steadyNavigationThreadShellsAtom } from "../../state/threads";
+import { useEnvironmentShellError } from "../../state/shell";
+import {
+  steadyFreshEnvironmentIdsAtom,
+  steadyNavigationThreadShellsAtom,
+  syncingShellEnvironmentIdsAtom,
+} from "../../state/threads";
+import { isWorkspaceEnvironmentUnavailable } from "../../state/workspaceModel";
+import { runtimeConnectionErrorText } from "../connection/environmentStatusText";
+import { deriveSelectedEnvironmentEmptyState } from "../home/home-empty-state";
+import { ThreadListSkeleton } from "./ThreadListSkeleton";
+import {
+  filterFreshThreads,
+  resolveSingleScopedEnvironmentId,
+  shouldShowThreadListSkeleton,
+} from "./thread-list-skeleton-state";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { useThreadListNow } from "./use-thread-list-now";
@@ -136,7 +151,12 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const insets = useSafeAreaInsets();
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
-  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
+  const freshEnvironmentIds = useAtomValue(steadyFreshEnvironmentIdsAtom);
+  const syncingEnvironmentIds = useAtomValue(syncingShellEnvironmentIdsAtom);
+  const threads = filterFreshThreads(
+    useAtomValue(steadyNavigationThreadShellsAtom),
+    freshEnvironmentIds,
+  );
   const selectedThreadKey = useSidebarRowThreadKey(props.selectedThreadKey);
   const selectedThread =
     threads.find(
@@ -298,6 +318,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
+    freshEnvironmentIds,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinReorderEnvironmentIds,
@@ -588,10 +609,60 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
+  const selectedProjectRefs = selectedProjectScope?.projectRefs ?? null;
+  const showsSkeleton = shouldShowThreadListSkeleton({
+    isLoadingConnections: catalogState.isLoadingConnections,
+    hasConnections: catalogState.hasConnections,
+    networkStatus: catalogState.networkStatus,
+    selectedEnvironmentId: options.selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
+    syncingEnvironmentIds,
+    hasVisibleRows: threadListV2Items.length > 0,
+  });
+  const scopedUnavailableEnvironmentId = resolveSingleScopedEnvironmentId({
+    selectedEnvironmentId: options.selectedEnvironmentId,
+    projectRefs: selectedProjectRefs,
+  });
+  const selectedEnvironmentShellError = useEnvironmentShellError(scopedUnavailableEnvironmentId);
+  const selectedEnvironment =
+    scopedUnavailableEnvironmentId === null
+      ? null
+      : (workspaceEnvironments.find(
+          (environment) => environment.environmentId === scopedUnavailableEnvironmentId,
+        ) ?? null);
+  const selectedEnvironmentUnavailable =
+    selectedEnvironment === null
+      ? null
+      : deriveSelectedEnvironmentEmptyState(
+          {
+            networkStatus: catalogState.networkStatus,
+            environment: selectedEnvironment,
+            hasFreshSnapshot: freshEnvironmentIds.has(selectedEnvironment.environmentId),
+            isActivelySyncing: syncingEnvironmentIds.has(selectedEnvironment.environmentId),
+            shellError: selectedEnvironmentShellError,
+          },
+          messages,
+        );
+  const isEnvironmentUnavailable = isWorkspaceEnvironmentUnavailable(catalogState);
+  const isAwaitingApproval =
+    isEnvironmentUnavailable &&
+    catalogState.hasAwaitingApprovalEnvironment === true &&
+    catalogState.shellSnapshotError === null;
   const showAddEnvironment =
     !catalogState.isLoadingConnections &&
     !catalogState.hasReadyEnvironment &&
-    !catalogState.hasConnectingEnvironment;
+    !isAwaitingApproval &&
+    !selectedEnvironmentUnavailable?.loading &&
+    (!catalogState.hasConnectingEnvironment ||
+      isEnvironmentUnavailable ||
+      selectedEnvironmentUnavailable !== null);
+  const workspaceUnavailableText = isAwaitingApproval
+    ? (runtimeConnectionErrorText(catalogState, messages) ?? gt("Waiting for approval on the host"))
+    : ((catalogState.shellSnapshotError !== null
+        ? shellErrorText(catalogState.shellSnapshotError, messages)
+        : null) ??
+      runtimeConnectionErrorText(catalogState, messages) ??
+      gt("Environment unavailable"));
   const listEmpty = (
     <View>
       <Text
@@ -603,17 +674,21 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       >
         {catalogState.isLoadingConnections
           ? gt("Loading threads…")
-          : showAddEnvironment
-            ? gt("No environments connected")
-            : props.searchQuery.trim().length > 0
-              ? threadSearch.isPending
-                ? gt("Searching thread messages…")
-                : threadSearch.failed
-                  ? gt("Couldn't search thread messages")
-                  : gt("No matching threads")
-              : selectedProjectScope !== null
-                ? gt("No threads in {project}", { project: selectedProjectScope.title })
-                : gt("No threads yet")}
+          : selectedEnvironmentUnavailable !== null
+            ? selectedEnvironmentUnavailable.detail
+            : isEnvironmentUnavailable
+              ? workspaceUnavailableText
+              : showAddEnvironment
+                ? gt("No environments connected")
+                : props.searchQuery.trim().length > 0
+                  ? threadSearch.isPending
+                    ? gt("Searching thread messages…")
+                    : threadSearch.failed
+                      ? gt("Couldn't search thread messages")
+                      : gt("No matching threads")
+                  : selectedProjectScope !== null
+                    ? gt("No threads in {project}", { project: selectedProjectScope.title })
+                    : gt("No threads yet")}
       </Text>
       {showAddEnvironment ? (
         <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
@@ -634,40 +709,59 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       <>
         {header}
         <View className="flex-1">
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
-            <GestureDetector gesture={sidebarScrollGesture}>
-              <AnimatedLegendList
-                renderScrollComponent={NativeScrollView}
-                itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
-                data={listItems}
-                drawDistance={500}
-                estimatedItemSize={64}
-                extraData={listExtraData}
-                getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
-                keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
-                automaticallyAdjustsScrollIndicatorInsets
-                // The column lays the list under its bar, glass or solid; UIKit insets it past both.
-                contentInsetAdjustmentBehavior="automatic"
-                contentContainerStyle={[
-                  styles.threadListContent,
-                  {
-                    paddingBottom: Math.max(insets.bottom, 16) + 16,
-                    paddingTop: 6,
-                  },
-                ]}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-                {...scrollGateHandlers}
-                recycleItems
-                scrollEventThrottle={16}
-                showsVerticalScrollIndicator={false}
-                style={styles.threadList}
-                ListEmptyComponent={listEmpty}
-              />
-            </GestureDetector>
-          </SwipeableScrollGateProvider>
+          {showsSkeleton ? (
+            <NativeScrollView
+              automaticallyAdjustsScrollIndicatorInsets
+              contentInsetAdjustmentBehavior="automatic"
+              contentContainerStyle={[
+                styles.threadListContent,
+                {
+                  paddingBottom: Math.max(insets.bottom, 16) + 16,
+                  paddingTop: 6,
+                },
+              ]}
+              scrollEnabled={false}
+              showsVerticalScrollIndicator={false}
+              style={styles.threadList}
+            >
+              <ThreadListSkeleton variant="sidebar" />
+            </NativeScrollView>
+          ) : (
+            <SwipeableScrollGateProvider enabled={swipeEnabled}>
+              <GestureDetector gesture={sidebarScrollGesture}>
+                <AnimatedLegendList
+                  renderScrollComponent={NativeScrollView}
+                  itemLayoutAnimation={THREAD_LIST_ROW_LAYOUT}
+                  data={listItems}
+                  drawDistance={500}
+                  estimatedItemSize={64}
+                  extraData={listExtraData}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={sidebarItemsAreEqual}
+                  keyExtractor={(item) => item.key}
+                  renderItem={renderListItem}
+                  automaticallyAdjustsScrollIndicatorInsets
+                  // The column lays the list under its bar, glass or solid; UIKit insets it past both.
+                  contentInsetAdjustmentBehavior="automatic"
+                  contentContainerStyle={[
+                    styles.threadListContent,
+                    {
+                      paddingBottom: Math.max(insets.bottom, 16) + 16,
+                      paddingTop: 6,
+                    },
+                  ]}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  recycleItems
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.threadList}
+                  ListEmptyComponent={listEmpty}
+                />
+              </GestureDetector>
+            </SwipeableScrollGateProvider>
+          )}
           <ThreadUndoNotice visible={props.visible} />
         </View>
       </>
@@ -688,7 +782,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           overflow: "hidden",
         }}
       >
-        {listItems.length === 0 ? (
+        {showsSkeleton ? (
+          <ThreadListSkeleton variant="sidebar" style={{ paddingTop: 6 }} />
+        ) : listItems.length === 0 ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>

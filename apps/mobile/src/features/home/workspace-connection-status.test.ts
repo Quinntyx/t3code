@@ -8,6 +8,8 @@ function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState
     isLoadingConnections: false,
     hasConnections: true,
     hasLoadedShellSnapshot: true,
+    hasFreshShellSnapshot: true,
+    hasActivelySyncingEnvironment: false,
     hasPendingShellSnapshot: false,
     hasSyncingConnectedEnvironment: false,
     hasReadyEnvironment: true,
@@ -77,5 +79,23 @@ describe("workspace connection status", () => {
       label: "Syncing threads...",
       showsProgress: true,
     });
+
+    expect(
+      workspaceConnectionStatusPresentation({ ...state, hasFreshShellSnapshot: false }),
+    ).toEqual({
+      label: "Loading threads...",
+      showsProgress: true,
+    });
+  });
+
+  it("does not show a loading header banner when a connected environment has a shell sync error", () => {
+    const state = workspaceState({
+      hasFreshShellSnapshot: false,
+      hasPendingShellSnapshot: false,
+      hasSyncingConnectedEnvironment: false,
+      shellSnapshotError: "Could not synchronize environment data.",
+    });
+
+    expect(workspaceConnectionStatusPresentation(state)).toBeNull();
   });
 });

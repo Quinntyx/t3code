@@ -71,4 +71,162 @@ describe("ConnectionDriver", () => {
       ]);
     }),
   );
+
+  it.effect(
+    "tries the matching route without checking routes when skipRouteCheckForId matches, and falls back if it fails",
+    () =>
+      Effect.gen(function* () {
+        const checked = yield* Ref.make<ReadonlyArray<string>>([]);
+        const attempted = yield* Ref.make<ReadonlyArray<string>>([]);
+        const entry: ConnectionCatalogEntry = {
+          target: sshTarget("first"),
+          profile: Option.none(),
+          enabled: true,
+          alternateRoutes: [
+            { target: sshTarget("second"), profile: Option.none() },
+            { target: sshTarget("third"), profile: Option.none() },
+          ],
+        };
+
+        const direct = yield* ConnectionDriver.connectOverRoutes(
+          entry,
+          (route) =>
+            Ref.update(checked, (all) => [
+              ...all,
+              (route.target as SshConnectionTarget).connectionId,
+            ]).pipe(Effect.as<ConnectionDriver.RouteCheck>("answered")),
+          (route) => {
+            const id = (route.target as SshConnectionTarget).connectionId;
+            return Ref.update(attempted, (all) => [...all, id]).pipe(
+              Effect.as({
+                prepared: {
+                  environmentId: route.target.environmentId,
+                  label: route.target.label,
+                  httpBaseUrl: "http://127.0.0.1:1",
+                  socketUrl: "ws://127.0.0.1:1/ws",
+                  httpAuthorization: null,
+                  target: route.target,
+                },
+                session: {} as RpcSession.RpcSession,
+              }),
+            );
+          },
+          { skipRouteCheckForId: "first" },
+        ).pipe(Effect.scoped);
+
+        expect((direct.prepared.target as SshConnectionTarget).connectionId).toBe("first");
+        expect(yield* Ref.get(checked)).toEqual([]);
+        expect(yield* Ref.get(attempted)).toEqual(["first"]);
+
+        // A non-matching route ID still runs route checks before connecting.
+        yield* Ref.set(checked, []);
+        yield* Ref.set(attempted, []);
+        yield* ConnectionDriver.connectOverRoutes(
+          entry,
+          (route) =>
+            Ref.update(checked, (all) => [
+              ...all,
+              (route.target as SshConnectionTarget).connectionId,
+            ]).pipe(Effect.as<ConnectionDriver.RouteCheck>("answered")),
+          (route) => {
+            const id = (route.target as SshConnectionTarget).connectionId;
+            return Ref.update(attempted, (all) => [...all, id]).pipe(
+              Effect.as({
+                prepared: {
+                  environmentId: route.target.environmentId,
+                  label: route.target.label,
+                  httpBaseUrl: "http://127.0.0.1:1",
+                  socketUrl: "ws://127.0.0.1:1/ws",
+                  httpAuthorization: null,
+                  target: route.target,
+                },
+                session: {} as RpcSession.RpcSession,
+              }),
+            );
+          },
+          { skipRouteCheckForId: "other" },
+        ).pipe(Effect.scoped);
+        expect(yield* Ref.get(checked)).toContain("first");
+
+        // When the first route fails, remaining routes still run their checks and connect.
+        yield* Ref.set(checked, []);
+        yield* Ref.set(attempted, []);
+        const fallback = yield* ConnectionDriver.connectOverRoutes(
+          entry,
+          (route) =>
+            Ref.update(checked, (all) => [
+              ...all,
+              (route.target as SshConnectionTarget).connectionId,
+            ]).pipe(Effect.as<ConnectionDriver.RouteCheck>("answered")),
+          (route) => {
+            const id = (route.target as SshConnectionTarget).connectionId;
+            return Ref.update(attempted, (all) => [...all, id]).pipe(
+              Effect.andThen(
+                id === "first"
+                  ? Effect.fail(
+                      new ConnectionTransientError({
+                        reason: "transport",
+                        detail: "Socket closed.",
+                      }),
+                    )
+                  : Effect.succeed({
+                      prepared: {
+                        environmentId: route.target.environmentId,
+                        label: route.target.label,
+                        httpBaseUrl: "http://127.0.0.1:1",
+                        socketUrl: "ws://127.0.0.1:1/ws",
+                        httpAuthorization: null,
+                        target: route.target,
+                      },
+                      session: {} as RpcSession.RpcSession,
+                    }),
+              ),
+            );
+          },
+          { skipRouteCheckForId: "first" },
+        ).pipe(Effect.scoped);
+
+        expect((fallback.prepared.target as SshConnectionTarget).connectionId).toBe("second");
+        expect(yield* Ref.get(checked)).not.toContain("first");
+        expect(yield* Ref.get(checked)).toContain("second");
+        expect(yield* Ref.get(attempted)).toEqual(["first", "second"]);
+
+        // Two-route fallback: when the skipped first route fails transiently, the lone remaining
+        // route still runs its check and is skipped if silent rather than dialed unchecked.
+        const twoRouteChecked = yield* Ref.make<ReadonlyArray<string>>([]);
+        const twoRouteAttempted = yield* Ref.make<ReadonlyArray<string>>([]);
+        const twoRouteEntry: ConnectionCatalogEntry = {
+          target: sshTarget("tailscale"),
+          profile: Option.none(),
+          enabled: true,
+          alternateRoutes: [{ target: sshTarget("dead-lan"), profile: Option.none() }],
+        };
+        const twoRouteError = yield* ConnectionDriver.connectOverRoutes(
+          twoRouteEntry,
+          (route) =>
+            Ref.update(twoRouteChecked, (all) => [
+              ...all,
+              (route.target as SshConnectionTarget).connectionId,
+            ]).pipe(Effect.as<ConnectionDriver.RouteCheck>("silent")),
+          (route) => {
+            const id = (route.target as SshConnectionTarget).connectionId;
+            return Ref.update(twoRouteAttempted, (all) => [...all, id]).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ConnectionTransientError({
+                    reason: "transport",
+                    detail: "Socket closed.",
+                  }),
+                ),
+              ),
+            );
+          },
+          { skipRouteCheckForId: "tailscale" },
+        ).pipe(Effect.scoped, Effect.flip);
+
+        expect(twoRouteError.reason).toBe("transport");
+        expect(yield* Ref.get(twoRouteChecked)).toEqual(["dead-lan"]);
+        expect(yield* Ref.get(twoRouteAttempted)).toEqual(["tailscale"]);
+      }),
+  );
 });
