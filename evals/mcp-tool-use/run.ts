@@ -3356,9 +3356,27 @@ const main = Effect.gen(function* () {
               : Effect.succeed(built);
           }),
         );
+  const formatBaseKey = (
+    role: string,
+    deviceAgentAccess: boolean,
+    browserAgentAccess: boolean,
+    linkedEnvironments: boolean,
+    forge: boolean,
+    email: unknown,
+    agentFeedback: string,
+  ) =>
+    JSON.stringify([
+      role,
+      deviceAgentAccess,
+      browserAgentAccess,
+      linkedEnvironments,
+      forge,
+      email ?? null,
+      agentFeedback,
+    ]);
   // Codex has no native subagents; its cases with that role run as top-level threads.
   const baseKey = ({ setup }: McpToolUseCase) =>
-    JSON.stringify([
+    formatBaseKey(
       codex && setup.role === "native-subagent" ? "top" : setup.role,
       setup.world?.deviceAgentAccess !== false,
       setup.world?.browserAgentAccess !== false,
@@ -3366,10 +3384,10 @@ const main = Effect.gen(function* () {
       setup.forge !== false,
       setup.email ?? null,
       setup.world?.agentFeedback ?? "off",
-    ]);
+    );
   const base = yield* buildFor("top", true, true, false, true);
   const bases = new Map<string, Base>([
-    [JSON.stringify(["top", true, true, false, true, null, "off"]), base],
+    [formatBaseKey("top", true, true, false, true, null, "off"), base],
   ]);
   for (const testCase of selected) {
     const key = baseKey(testCase);
